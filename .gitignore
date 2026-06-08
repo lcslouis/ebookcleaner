@@ -8,7 +8,7 @@ build/
 .venv/
 venv/
 env/
-*.spec
+# *.spec intentionally not ignored — ebookcleaner.spec is tracked
 .idea/
 .vscode/
 *.db

@@ -1,0 +1,77 @@
+name: Build Windows Executable
+
+on:
+  push:
+    branches:
+      - main
+      - master
+      - claude/ebook-management-app-27udad
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Build executable with PyInstaller
+        run: pyinstaller ebookcleaner.spec --clean --noconfirm
+
+      - name: Verify build output
+        run: |
+          if (Test-Path "dist\EbookCleaner\EbookCleaner.exe") {
+            Write-Host "Build successful"
+            $size = (Get-Item "dist\EbookCleaner\EbookCleaner.exe").Length / 1MB
+            Write-Host "EXE size: $([math]::Round($size, 1)) MB"
+          } else {
+            Write-Host "ERROR: EbookCleaner.exe not found"
+            exit 1
+          }
+
+      - name: Create ZIP archive
+        run: |
+          Compress-Archive -Path dist\EbookCleaner -DestinationPath dist\EbookCleaner-Windows.zip
+          $size = (Get-Item "dist\EbookCleaner-Windows.zip").Length / 1MB
+          Write-Host "ZIP size: $([math]::Round($size, 1)) MB"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: EbookCleaner-Windows
+          path: dist/EbookCleaner-Windows.zip
+          retention-days: 90
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/EbookCleaner-Windows.zip
+          generate_release_notes: true
+          body: |
+            ## EbookCleaner Windows Release
+
+            ### Installation
+            1. Download `EbookCleaner-Windows.zip`
+            2. Extract the zip anywhere on your PC
+            3. Run `EbookCleaner.exe` inside the extracted folder
+            4. No Python or other installs required
+
+            ### First run
+            - Go to **Settings** (toolbar) and enter your Anthropic API key to enable AI features
+            - Use **Import Book** to add EPUB or TXT files
