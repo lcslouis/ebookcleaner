@@ -459,49 +459,5 @@ SITE_CONFIGS: List[SiteConfig] = [
         cover_selectors=["img.cover"],
     ),
 
-    # ------------------------------------------------------------------ NovelBin (and mirror domains)
-    # NovelBin is a WordPress-based novel aggregator. The chapter list is
-    # loaded via AJAX into #list-chapter; the static HTML also contains
-    # ul.list-chapter as a fallback. Content lives in div#chr-content.
-    SiteConfig(
-        site_name="NovelBin",
-        domains=[
-            "novelbin.com", "novelbin.net", "novelbin.me",
-            "novelbin.org", "novelbin.cc",
-        ],
-        toc_selectors=[
-            "#list-chapter li a",
-            "ul.list-chapter li a",
-            "ul.list-chapter a",
-            "div.list-chapter a",
-        ],
-        content_selectors=[
-            "div#chr-content",
-            "div.chr-c",
-            "div#chapter-content",
-            "div.chapter-content",
-        ],
-        title_selectors=[
-            "div.book-info h3.title",
-            "h3.title",
-            "h1.book-title",
-            "h1",
-        ],
-        author_selectors=[
-            "div.book-info a.info-author",
-            "a.info-author",
-            "span.author a",
-        ],
-        description_selectors=[
-            "div.desc-text",
-            "div.book-intro",
-            "div.summary__content",
-        ],
-        cover_selectors=[
-            "div.book-img img",
-            "div.summary_image img",
-            "img.book-cover",
-        ],
-    ),
 
 ]

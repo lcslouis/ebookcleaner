@@ -14,6 +14,7 @@ from .wattpad_parser import WattpadParser
 from .bakatsuki_parser import BakaTsukiParser
 from .fictioneer_parser import FictioneerParser
 from .blogspot_parser import BlogspotParser
+from .novelbin_parser import NovelBinParser
 from .config_parser import get_config_parsers
 from .default_parser import DefaultParser
 
@@ -27,6 +28,7 @@ _DEDICATED = [
     BakaTsukiParser(),
     FictioneerParser(),
     BlogspotParser(),
+    NovelBinParser(),
 ]
 
 # Config parsers (one per SiteConfig entry)
