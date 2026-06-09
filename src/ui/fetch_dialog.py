@@ -343,14 +343,22 @@ class FetchDialog(QDialog):
 
         # In update mode, mark already-fetched chapters so user can see what's new
         existing_urls: set = set()
+        existing_count: int = 0
         if self._update_book_id:
             existing_urls = self.db.get_chapter_source_urls(self._update_book_id)
+            existing_count = self.db.get_max_chapter_number(self._update_book_id)
 
         self.chapter_list.blockSignals(True)
         self.chapter_list.clear()
         new_count = 0
-        for ch in info.get("chapters") or []:
-            already_have = ch.get("url", "") in existing_urls
+        for i, ch in enumerate(info.get("chapters") or []):
+            url = ch.get("url", "")
+            if existing_urls:
+                # URL-based matching (precise): used for books fetched with the new code
+                already_have = bool(url) and url in existing_urls
+            else:
+                # Position-based fallback: first existing_count chapters are already imported
+                already_have = (i + 1) <= existing_count
             label = ch["title"]
             if already_have:
                 label = f"[already imported] {label}"
@@ -476,12 +484,17 @@ class FetchDialog(QDialog):
     def _update_existing_book(self, chapter_results):
         book_id = self._update_book_id
         existing_urls = self.db.get_chapter_source_urls(book_id)
+        existing_count = self.db.get_max_chapter_number(book_id)
 
-        # Only add chapters whose URL isn't already stored
-        new_chapters = [
-            ch for ch in chapter_results
-            if ch.get("url", "") not in existing_urls
-        ]
+        if existing_urls:
+            # URL-based dedup: precise for books with stored source URLs
+            new_chapters = [
+                ch for ch in chapter_results
+                if not (ch.get("url", "") and ch.get("url", "") in existing_urls)
+            ]
+        else:
+            # Position-based fallback: anything beyond the current chapter count is new
+            new_chapters = chapter_results[existing_count:]
 
         if not new_chapters:
             self._set_loading(False)
