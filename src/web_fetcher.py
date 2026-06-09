@@ -44,7 +44,7 @@ class WebFetcher:
 
         # Resolve special placeholder chapters
         info["chapters"] = self._resolve_special_chapters(info["chapters"], parser)
-
+        info["chapters"] = self._normalize_chapter_titles(info["chapters"])
         return info
 
     def fetch_chapter(self, url: str) -> str:
@@ -118,6 +118,20 @@ class WebFetcher:
                     full += ("&" if "?" in full else "?") + "view_adult=true"
                 chapters.append({"url": full, "title": a.get_text(strip=True)})
         return chapters
+
+    def _normalize_chapter_titles(self, chapters: list) -> list:
+        """
+        Give every chapter a meaningful title.
+        Empty titles and bare 'Chapter' placeholders become 'Chapter N'.
+        """
+        result = []
+        for i, ch in enumerate(chapters, start=1):
+            title = (ch.get("title") or "").strip()
+            if not title or title.lower() == "chapter":
+                ch = dict(ch)   # don't mutate the original
+                ch["title"] = f"Chapter {i}"
+            result.append(ch)
+        return result
 
     def _throttle(self):
         elapsed = time.time() - self._last_request_time
