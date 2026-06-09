@@ -54,7 +54,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: EbookCleaner-Windows
-          path: dist/EbookCleaner-Windows.zip
+          path: dist/EbookCleaner/
           retention-days: 90
 
       - name: Create GitHub Release

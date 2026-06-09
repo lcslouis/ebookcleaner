@@ -87,9 +87,10 @@ class NovelBinParser(BaseParser):
                     cover_url = self.absolute_url(base_url, src)
                     break
 
+        # AJAX returns the full chapter list; template only has the first ~30
         chapters = (
-            self._chapters_from_template(soup, base_url) or
-            self._chapters_from_ajax(soup, base_url)
+            self._chapters_from_ajax(soup, base_url) or
+            self._chapters_from_template(soup, base_url)
         )
 
         return {
