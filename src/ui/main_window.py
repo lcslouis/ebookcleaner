@@ -38,6 +38,7 @@ class MainWindow(QMainWindow):
         self.book_list.book_selected.connect(self._on_book_selected)
         self.book_list.import_requested.connect(self._import_book)
         self.book_list.book_deleted.connect(self._on_book_deleted)
+        self.book_list.update_requested.connect(self._update_from_web)
         splitter.addWidget(self.book_list)
 
         self.editor = BookEditorWidget(self.db)
@@ -64,6 +65,12 @@ class MainWindow(QMainWindow):
         )
         fetch_action.triggered.connect(self._fetch_from_web)
         tb.addAction(fetch_action)
+
+        self._update_action = QAction("Update from Web", self)
+        self._update_action.setToolTip("Re-fetch the selected book and add any new chapters")
+        self._update_action.setEnabled(False)
+        self._update_action.triggered.connect(self._update_selected_from_web)
+        tb.addAction(self._update_action)
 
         tb.addSeparator()
 
@@ -100,10 +107,12 @@ class MainWindow(QMainWindow):
         book = self.db.get_book(book_id)
         if book:
             self._status_label.setText(f"Loaded: {book['title']}")
+            self._update_action.setEnabled(bool(book.get("source_url")))
 
     def _on_book_deleted(self, book_id):
         self.editor._show_empty()
         self._export_action.setEnabled(False)
+        self._update_action.setEnabled(False)
         self._current_book_id = None
         self._status_label.setText("Book deleted")
 
@@ -122,6 +131,17 @@ class MainWindow(QMainWindow):
         dlg = FetchDialog(self.db, self)
         if dlg.exec():
             self._after_import(dlg.imported_book_id, "Web fetch complete")
+
+    def _update_selected_from_web(self):
+        book_id = getattr(self, "_current_book_id", None)
+        if book_id:
+            self._update_from_web(book_id)
+
+    def _update_from_web(self, book_id):
+        from src.ui.fetch_dialog import FetchDialog
+        dlg = FetchDialog(self.db, self, update_book_id=book_id)
+        if dlg.exec():
+            self._after_import(dlg.imported_book_id, "Book updated")
 
     def _after_import(self, book_id, msg):
         self.book_list.refresh()

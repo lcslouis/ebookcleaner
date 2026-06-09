@@ -32,7 +32,7 @@ class _TocWorker(QThread):
 
 class _FetchSignals(QObject):
     chapter_done = Signal(int, int, str)   # index, total, title
-    finished = Signal(list)               # list of {title, content}
+    finished = Signal(list)               # list of {title, content, url}
     error = Signal(str)
 
 
@@ -65,9 +65,10 @@ class _FetchWorker(QThread):
 # ------------------------------------------------------------------ dialog
 
 class FetchDialog(QDialog):
-    def __init__(self, db, parent=None):
+    def __init__(self, db, parent=None, update_book_id=None):
         super().__init__(parent)
         self.db = db
+        self._update_book_id = update_book_id   # None = new book, int = update existing
         self._toc_worker = None
         self._fetch_worker = None
         self._toc_info = None
@@ -75,10 +76,14 @@ class FetchDialog(QDialog):
         self._cover_mime = None
         self.imported_book_id = None
 
-        self.setWindowTitle("Fetch from Web")
+        title = "Update Book from Web" if update_book_id else "Fetch from Web"
+        self.setWindowTitle(title)
         self.setMinimumSize(820, 640)
         self.setModal(True)
         self._build_ui()
+
+        if update_book_id:
+            self._prefill_for_update(update_book_id)
 
     # ------------------------------------------------------------------ UI
 
@@ -121,14 +126,21 @@ class FetchDialog(QDialog):
         url_row.addWidget(self.load_btn)
         root.addLayout(url_row)
 
-        # Site detection label
-        site_row = QHBoxLayout()
-        site_row.addWidget(QLabel("Detected site:"))
-        self.site_label = QLabel("—")
-        self.site_label.setObjectName("subtext")
-        site_row.addWidget(self.site_label)
-        site_row.addStretch()
-        root.addLayout(site_row)
+        # Parser detection banner — prominent, color-coded
+        parser_frame = QFrame()
+        parser_frame.setObjectName("parserBanner")
+        parser_layout = QHBoxLayout(parser_frame)
+        parser_layout.setContentsMargins(10, 6, 10, 6)
+        parser_layout.setSpacing(8)
+        self._parser_icon = QLabel("?")
+        self._parser_icon.setFixedWidth(18)
+        self._parser_icon.setAlignment(Qt.AlignCenter)
+        parser_layout.addWidget(self._parser_icon)
+        self._parser_label = QLabel("Enter a URL above to detect the parser")
+        self._parser_label.setWordWrap(True)
+        parser_layout.addWidget(self._parser_label, 1)
+        root.addWidget(parser_frame)
+        self._parser_frame = parser_frame
 
         # Advanced options (generic parser CSS selector)
         adv_group = QGroupBox("Advanced (Generic Parser)")
@@ -224,11 +236,34 @@ class FetchDialog(QDialog):
         self.cancel_btn.setObjectName("secondary")
         self.cancel_btn.clicked.connect(self._cancel)
         bottom_row.addWidget(self.cancel_btn)
-        self.fetch_btn = QPushButton("Fetch & Import")
+        btn_label = "Fetch New Chapters" if self._update_book_id else "Fetch & Import"
+        self.fetch_btn = QPushButton(btn_label)
         self.fetch_btn.setEnabled(False)
         self.fetch_btn.clicked.connect(self._start_fetch)
         bottom_row.addWidget(self.fetch_btn)
         root.addLayout(bottom_row)
+
+    def _prefill_for_update(self, book_id):
+        book = self.db.get_book(book_id)
+        if not book:
+            return
+        url = book.get("source_url", "")
+        if url:
+            self.url_edit.setText(url)
+            # Lock the URL — update always uses the stored source
+            self.url_edit.setReadOnly(True)
+            self.url_edit.setToolTip("URL locked — editing is disabled in update mode")
+
+        existing_count = len(self.db.get_chapters(book_id))
+        existing_lbl = QLabel(
+            f"Updating: <b>{book.get('title','')}</b>  "
+            f"({existing_count} chapter(s) already in library — only new chapters will be added)"
+        )
+        existing_lbl.setObjectName("subtext")
+        existing_lbl.setWordWrap(True)
+        # Insert just below heading (index 1)
+        layout = self.layout()
+        layout.insertWidget(1, existing_lbl)
 
     # ------------------------------------------------------------------ slots
 
@@ -236,12 +271,49 @@ class FetchDialog(QDialog):
         text = text.strip()
         self.load_btn.setEnabled(bool(text))
         if text:
-            from src.parsers.registry import detect_site_name
+            from src.parsers.registry import get_parser_info
             try:
-                site = detect_site_name(text)
-                self.site_label.setText(site)
+                info = get_parser_info(text)
+                self._update_parser_banner(info["site_name"], info["parser_type"])
             except Exception:
-                self.site_label.setText("—")
+                self._update_parser_banner("Unknown", "Default")
+        else:
+            self._parser_icon.setText("?")
+            self._parser_label.setText("Enter a URL above to detect the parser")
+            self._parser_frame.setStyleSheet("")
+
+    def _update_parser_banner(self, site_name: str, parser_type: str):
+        if parser_type == "Dedicated":
+            icon = "✓"
+            color = "#2e7d32"      # dark green
+            bg = "#e8f5e9"
+            border = "#a5d6a7"
+            desc = "Dedicated parser — full support for this site"
+        elif parser_type == "Config":
+            icon = "~"
+            color = "#e65100"      # dark orange
+            bg = "#fff3e0"
+            border = "#ffcc80"
+            desc = "Config-based parser — CSS-selector driven, good support"
+        else:
+            icon = "!"
+            color = "#b71c1c"      # dark red
+            bg = "#ffebee"
+            border = "#ef9a9a"
+            desc = "Default heuristic parser — results may vary for this site"
+
+        self._parser_icon.setText(icon)
+        self._parser_label.setText(
+            f"<b>Parser:</b> {site_name} &nbsp;·&nbsp; {desc}"
+        )
+        self._parser_frame.setStyleSheet(
+            f"QFrame#parserBanner {{ "
+            f"background: {bg}; border: 1px solid {border}; border-radius: 4px; }}"
+        )
+        self._parser_label.setStyleSheet(f"color: {color};")
+        self._parser_icon.setStyleSheet(
+            f"color: {color}; font-weight: bold; font-size: 14px;"
+        )
 
     def _load_toc(self):
         url = self.url_edit.text().strip()
@@ -270,18 +342,38 @@ class FetchDialog(QDialog):
         cover_url = info.get("cover_url") or ""
         self.cover_label.setText(cover_url if cover_url else "None")
 
+        # In update mode, mark already-fetched chapters so user can see what's new
+        existing_urls: set = set()
+        if self._update_book_id:
+            existing_urls = self.db.get_chapter_source_urls(self._update_book_id)
+
         self.chapter_list.blockSignals(True)
         self.chapter_list.clear()
+        new_count = 0
         for ch in info.get("chapters") or []:
-            item = QListWidgetItem(ch["title"])
+            already_have = ch.get("url", "") in existing_urls
+            label = ch["title"]
+            if already_have:
+                label = f"[already imported] {label}"
+            item = QListWidgetItem(label)
             item.setData(Qt.UserRole, ch)
-            item.setCheckState(Qt.Checked)
+            item.setCheckState(Qt.Unchecked if already_have else Qt.Checked)
+            if already_have:
+                item.setForeground(QColor("#888888"))
+            else:
+                new_count += 1
             self.chapter_list.addItem(item)
         self.chapter_list.blockSignals(False)
 
         count = self.chapter_list.count()
-        self.ch_count_label.setText(f"{count} found")
-        self.fetch_btn.setEnabled(count > 0)
+        if self._update_book_id:
+            self.ch_count_label.setText(
+                f"{count} found · {new_count} new"
+            )
+        else:
+            self.ch_count_label.setText(f"{count} found")
+
+        self.fetch_btn.setEnabled(new_count > 0 if self._update_book_id else count > 0)
         self._update_selected_count()
 
     def _update_selected_count(self):
@@ -290,7 +382,10 @@ class FetchDialog(QDialog):
             if self.chapter_list.item(i).checkState() == Qt.Checked
         )
         total = self.chapter_list.count()
-        self.ch_count_label.setText(f"{checked}/{total} selected")
+        if self._update_book_id:
+            self.ch_count_label.setText(f"{checked} selected to add")
+        else:
+            self.ch_count_label.setText(f"{checked}/{total} selected")
         self.fetch_btn.setEnabled(checked > 0)
 
     def _select_all(self):
@@ -331,12 +426,13 @@ class FetchDialog(QDialog):
         from src.web_fetcher import WebFetcher
         fetcher = WebFetcher(delay=self.delay_spin.value(), content_selector=selector)
 
-        # Download cover in the background if available
-        cover_url = (self._toc_info or {}).get("cover_url", "")
-        if cover_url:
-            data, mime = fetcher.download_image(cover_url)
-            self._cover_data = data
-            self._cover_mime = mime or "image/jpeg"
+        # Download cover in the background if available (new book only)
+        if not self._update_book_id:
+            cover_url = (self._toc_info or {}).get("cover_url", "")
+            if cover_url:
+                data, mime = fetcher.download_image(cover_url)
+                self._cover_data = data
+                self._cover_mime = mime or "image/jpeg"
 
         self._fetch_worker = _FetchWorker(fetcher, selected)
         self._fetch_worker.signals.chapter_done.connect(self._on_chapter_done)
@@ -352,9 +448,14 @@ class FetchDialog(QDialog):
     @Slot(list)
     def _on_fetch_complete(self, results):
         self.progress_label.setText("Saving to library...")
-        self._save_to_db(results)
+        if self._update_book_id:
+            self._update_existing_book(results)
+        else:
+            self._create_new_book(results)
 
-    def _save_to_db(self, chapter_results):
+    # ------------------------------------------------------------------ save
+
+    def _create_new_book(self, chapter_results):
         info = self._toc_info or {}
         title = self.title_edit.text().strip() or info.get("title") or "Untitled"
         author = self.author_edit.text().strip() or info.get("author") or ""
@@ -364,12 +465,12 @@ class FetchDialog(QDialog):
 
         book_id = self.db.add_book(title, author, description,
                                     source_url=source_url, cover_url=cover_url)
-        # Save cover image file
         if self._cover_data:
             self._save_cover_file(book_id, self._cover_data, self._cover_mime)
 
         for i, ch in enumerate(chapter_results, start=1):
-            self.db.add_chapter(book_id, i, ch["title"], ch["content"])
+            self.db.add_chapter(book_id, i, ch["title"], ch["content"],
+                                source_url=ch.get("url", ""))
 
         version_num = self.db.get_next_version_number(book_id)
         self.db.add_version(book_id, version_num, source_url, len(chapter_results),
@@ -377,6 +478,46 @@ class FetchDialog(QDialog):
 
         self.imported_book_id = book_id
         self._set_loading(False)
+        self.accept()
+
+    def _update_existing_book(self, chapter_results):
+        book_id = self._update_book_id
+        existing_urls = self.db.get_chapter_source_urls(book_id)
+
+        # Only add chapters whose URL isn't already stored
+        new_chapters = [
+            ch for ch in chapter_results
+            if ch.get("url", "") not in existing_urls
+        ]
+
+        if not new_chapters:
+            self._set_loading(False)
+            QMessageBox.information(
+                self, "No New Chapters",
+                "All fetched chapters are already in the library. Nothing was added."
+            )
+            self.reject()
+            return
+
+        start_num = self.db.get_max_chapter_number(book_id) + 1
+        for i, ch in enumerate(new_chapters):
+            self.db.add_chapter(book_id, start_num + i, ch["title"], ch["content"],
+                                source_url=ch.get("url", ""))
+
+        # Touch updated_at on the book record
+        self.db.update_book(book_id, title=self.db.get_book(book_id)["title"])
+
+        source_url = self.url_edit.text().strip()
+        version_num = self.db.get_next_version_number(book_id)
+        self.db.add_version(book_id, version_num, source_url, len(new_chapters),
+                             notes=f"Update: {len(new_chapters)} new chapter(s) added")
+
+        self.imported_book_id = book_id
+        self._set_loading(False)
+        QMessageBox.information(
+            self, "Update Complete",
+            f"{len(new_chapters)} new chapter(s) added to the library."
+        )
         self.accept()
 
     def _save_cover_file(self, book_id, data, mime):
@@ -435,7 +576,7 @@ class FetchDialog(QDialog):
 
     def _set_loading(self, loading: bool, msg: str = ""):
         self.load_btn.setEnabled(not loading)
-        self.url_edit.setEnabled(not loading)
+        self.url_edit.setEnabled(not loading and not bool(self._update_book_id))
         if loading:
             self.progress_bar.setVisible(True)
             self.progress_bar.setRange(0, 0)  # indeterminate

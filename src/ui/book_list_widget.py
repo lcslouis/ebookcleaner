@@ -1,6 +1,6 @@
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QListWidget, QListWidgetItem,
-    QPushButton, QLineEdit, QLabel, QMessageBox
+    QPushButton, QLineEdit, QLabel, QMessageBox, QMenu
 )
 from PySide6.QtCore import Signal, Qt
 
@@ -9,6 +9,7 @@ class BookListWidget(QWidget):
     book_selected = Signal(int)
     import_requested = Signal()
     book_deleted = Signal(int)
+    update_requested = Signal(int)   # book_id — re-fetch from source URL
 
     def __init__(self, db, parent=None):
         super().__init__(parent)
@@ -34,6 +35,8 @@ class BookListWidget(QWidget):
         self.list_widget = QListWidget()
         self.list_widget.setAlternatingRowColors(False)
         self.list_widget.itemSelectionChanged.connect(self._on_selection_changed)
+        self.list_widget.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.list_widget.customContextMenuRequested.connect(self._show_context_menu)
         layout.addWidget(self.list_widget)
 
         btn_row = QHBoxLayout()
@@ -104,8 +107,36 @@ class BookListWidget(QWidget):
 
     def _delete_selected(self):
         book_id = self._current_book_id()
-        if book_id is None:
+        if book_id is not None:
+            self._delete_book(book_id)
+
+    def select_book(self, book_id):
+        for i in range(self.list_widget.count()):
+            if self.list_widget.item(i).data(Qt.UserRole) == book_id:
+                self.list_widget.setCurrentRow(i)
+                break
+
+    def _show_context_menu(self, pos):
+        item = self.list_widget.itemAt(pos)
+        if not item:
             return
+        book_id = item.data(Qt.UserRole)
+        book = self.db.get_book(book_id)
+
+        menu = QMenu(self)
+
+        if book and book.get("source_url"):
+            act = menu.addAction("Update from Web")
+            act.setToolTip("Re-fetch this book and add any new chapters")
+            act.triggered.connect(lambda: self.update_requested.emit(book_id))
+            menu.addSeparator()
+
+        del_act = menu.addAction("Delete Book")
+        del_act.triggered.connect(lambda: self._delete_book(book_id))
+
+        menu.exec(self.list_widget.mapToGlobal(pos))
+
+    def _delete_book(self, book_id):
         book = self.db.get_book(book_id)
         title = book["title"] if book else "this book"
         reply = QMessageBox.question(
@@ -119,9 +150,3 @@ class BookListWidget(QWidget):
             self.db.delete_book(book_id)
             self.book_deleted.emit(book_id)
             self.refresh()
-
-    def select_book(self, book_id):
-        for i in range(self.list_widget.count()):
-            if self.list_widget.item(i).data(Qt.UserRole) == book_id:
-                self.list_widget.setCurrentRow(i)
-                break

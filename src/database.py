@@ -70,6 +70,10 @@ class Database:
         for col, defn in [("source_url", "TEXT DEFAULT ''"), ("cover_url", "TEXT DEFAULT ''")]:
             if col not in existing:
                 self.conn.execute(f"ALTER TABLE books ADD COLUMN {col} {defn}")
+
+        ch_existing = {row[1] for row in self.conn.execute("PRAGMA table_info(chapters)").fetchall()}
+        if "source_url" not in ch_existing:
+            self.conn.execute("ALTER TABLE chapters ADD COLUMN source_url TEXT DEFAULT ''")
         self.conn.commit()
 
     # --- Books ---
@@ -118,7 +122,7 @@ class Database:
     def get_chapters(self, book_id):
         cur = self.conn.execute(
             """SELECT id, book_id, chapter_number, title, original_content,
-                      cleaned_content, rewritten_content, word_count, status
+                      cleaned_content, rewritten_content, word_count, status, source_url
                FROM chapters WHERE book_id = ? ORDER BY chapter_number""",
             (book_id,)
         )
@@ -127,20 +131,28 @@ class Database:
     def get_chapter(self, chapter_id):
         cur = self.conn.execute(
             """SELECT id, book_id, chapter_number, title, original_content,
-                      cleaned_content, rewritten_content, word_count, status
+                      cleaned_content, rewritten_content, word_count, status, source_url
                FROM chapters WHERE id = ?""",
             (chapter_id,)
         )
         row = cur.fetchone()
         return dict(row) if row else None
 
-    def add_chapter(self, book_id, number, title, content):
+    def get_chapter_source_urls(self, book_id) -> set:
+        """Return the set of source_urls already stored for this book's chapters."""
+        cur = self.conn.execute(
+            "SELECT source_url FROM chapters WHERE book_id = ? AND source_url != ''",
+            (book_id,)
+        )
+        return {row[0] for row in cur.fetchall()}
+
+    def add_chapter(self, book_id, number, title, content, source_url=""):
         word_count = len(content.split())
         cur = self.conn.execute(
             """INSERT OR REPLACE INTO chapters
-               (book_id, chapter_number, title, original_content, word_count)
-               VALUES (?, ?, ?, ?, ?)""",
-            (book_id, number, title, content, word_count)
+               (book_id, chapter_number, title, original_content, word_count, source_url)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (book_id, number, title, content, word_count, source_url)
         )
         self.conn.commit()
         return cur.lastrowid

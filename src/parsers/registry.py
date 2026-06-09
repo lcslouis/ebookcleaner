@@ -46,6 +46,20 @@ def get_parser(url: str, content_selector: str = "") -> object:
     return DefaultParser(content_selector)
 
 
+def get_parser_info(url: str) -> dict:
+    """Return site name and parser tier for a URL.
+
+    parser_type values: 'Dedicated' | 'Config' | 'Default'
+    """
+    for parser in _DEDICATED:
+        if parser.can_handle(url):
+            return {"site_name": parser.site_name, "parser_type": "Dedicated"}
+    for parser in _CONFIG:
+        if parser.can_handle(url):
+            return {"site_name": parser.site_name, "parser_type": "Config"}
+    return {"site_name": "Unknown site", "parser_type": "Default"}
+
+
 def detect_site_name(url: str) -> str:
     return get_parser(url).site_name
 
