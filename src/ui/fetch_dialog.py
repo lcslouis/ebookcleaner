@@ -200,13 +200,12 @@ class FetchDialog(QDialog):
         rl.addWidget(QLabel("Description:"))
         self.desc_edit = QTextEdit()
         self.desc_edit.setReadOnly(True)
-        self.desc_edit.setMaximumHeight(120)
+        self.desc_edit.setMaximumHeight(100)
         rl.addWidget(self.desc_edit)
         rl.addWidget(QLabel("Cover image:"))
-        self.cover_label = QLabel("None")
-        self.cover_label.setObjectName("subtext")
-        self.cover_label.setWordWrap(True)
-        rl.addWidget(self.cover_label)
+        from src.ui.cover_picker_widget import CoverPickerWidget
+        self.cover_picker = CoverPickerWidget()
+        rl.addWidget(self.cover_picker)
         rl.addStretch()
         splitter.addWidget(right)
 
@@ -340,7 +339,7 @@ class FetchDialog(QDialog):
         self.desc_edit.setPlainText(info.get("description") or "")
 
         cover_url = info.get("cover_url") or ""
-        self.cover_label.setText(cover_url if cover_url else "None")
+        self.cover_picker.set_url(cover_url, auto_download=bool(cover_url))
 
         # In update mode, mark already-fetched chapters so user can see what's new
         existing_urls: set = set()
@@ -426,14 +425,6 @@ class FetchDialog(QDialog):
         from src.web_fetcher import WebFetcher
         fetcher = WebFetcher(delay=self.delay_spin.value(), content_selector=selector)
 
-        # Download cover in the background if available (new book only)
-        if not self._update_book_id:
-            cover_url = (self._toc_info or {}).get("cover_url", "")
-            if cover_url:
-                data, mime = fetcher.download_image(cover_url)
-                self._cover_data = data
-                self._cover_mime = mime or "image/jpeg"
-
         self._fetch_worker = _FetchWorker(fetcher, selected)
         self._fetch_worker.signals.chapter_done.connect(self._on_chapter_done)
         self._fetch_worker.signals.finished.connect(self._on_fetch_complete)
@@ -465,8 +456,10 @@ class FetchDialog(QDialog):
 
         book_id = self.db.add_book(title, author, description,
                                     source_url=source_url, cover_url=cover_url)
-        if self._cover_data:
-            self._save_cover_file(book_id, self._cover_data, self._cover_mime)
+        cover_data = self.cover_picker.get_cover_data()
+        cover_mime = self.cover_picker.get_cover_mime()
+        if cover_data:
+            self._save_cover_file(book_id, cover_data, cover_mime)
 
         for i, ch in enumerate(chapter_results, start=1):
             self.db.add_chapter(book_id, i, ch["title"], ch["content"],

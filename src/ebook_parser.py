@@ -92,11 +92,14 @@ class EbookParser:
             })
             chapter_num += 1
 
+        cover_data, cover_mime = self.extract_cover(file_path)
         return {
             "title": title,
             "author": author,
             "description": description,
             "chapters": chapters,
+            "cover_data": cover_data,
+            "cover_mime": cover_mime,
         }
 
     def _parse_txt(self, file_path):
@@ -169,6 +172,36 @@ class EbookParser:
             if text and text.lower() not in ("untitled", ""):
                 return text
         return None
+
+    def extract_cover(self, file_path) -> tuple:
+        """Return (data: bytes, mime: str) for the cover image, or (b'', '') if none."""
+        if not file_path.lower().endswith(".epub"):
+            return b"", ""
+        try:
+            import ebooklib
+            from ebooklib import epub
+            book = epub.read_epub(file_path)
+
+            # 1. OPF cover metadata points to an item id
+            for meta in book.get_metadata("OPF", "cover"):
+                cover_id = meta[1].get("content")
+                if cover_id:
+                    item = book.get_item_with_id(cover_id)
+                    if item:
+                        return item.get_content(), item.media_type or "image/jpeg"
+
+            # 2. Item typed as ITEM_COVER
+            for item in book.get_items():
+                if item.get_type() == ebooklib.ITEM_COVER:
+                    return item.get_content(), item.media_type or "image/jpeg"
+
+            # 3. Any image whose filename contains "cover"
+            for item in book.get_items_of_type(ebooklib.ITEM_IMAGE):
+                if "cover" in item.file_name.lower():
+                    return item.get_content(), item.media_type or "image/jpeg"
+        except Exception:
+            pass
+        return b"", ""
 
     def _clean_whitespace(self, text):
         text = re.sub(r"[ \t]+", " ", text)

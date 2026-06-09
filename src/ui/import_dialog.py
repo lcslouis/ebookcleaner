@@ -79,6 +79,12 @@ class ImportDialog(QDialog):
 
         layout.addLayout(form)
 
+        cover_lbl = QLabel("Cover image:")
+        layout.addWidget(cover_lbl)
+        from src.ui.cover_picker_widget import CoverPickerWidget
+        self.cover_picker = CoverPickerWidget()
+        layout.addWidget(self.cover_picker)
+
         sep2 = QFrame()
         sep2.setFrameShape(QFrame.HLine)
         layout.addWidget(sep2)
@@ -146,6 +152,10 @@ class ImportDialog(QDialog):
             self.title_edit.setText(data.get("title", ""))
         if not self.author_edit.text():
             self.author_edit.setText(data.get("author", ""))
+        cover_data = data.get("cover_data", b"")
+        cover_mime = data.get("cover_mime", "image/jpeg")
+        if cover_data:
+            self.cover_picker.set_cover_data(cover_data, cover_mime)
         self.import_btn.setEnabled(True)
 
     def _on_parse_error(self, msg):
@@ -184,11 +194,23 @@ class ImportDialog(QDialog):
             self.db.add_chapter(book_id, ch["number"], ch["title"], ch["content"])
         progress.setValue(len(chapters))
 
+        cover_data = self.cover_picker.get_cover_data()
+        cover_mime = self.cover_picker.get_cover_mime()
+        if cover_data:
+            self._save_cover_file(book_id, cover_data, cover_mime)
+
         version_num = self.db.get_next_version_number(book_id)
         self.db.add_version(book_id, version_num, self._file_path or "", len(chapters))
 
         self.imported_book_id = book_id
         self.accept()
+
+    def _save_cover_file(self, book_id, data, mime):
+        from pathlib import Path
+        ext = "jpg" if "jpeg" in mime else mime.split("/")[-1]
+        covers_dir = Path.home() / ".ebookcleaner" / "covers"
+        covers_dir.mkdir(parents=True, exist_ok=True)
+        (covers_dir / f"{book_id}.{ext}").write_bytes(data)
 
     def _do_merge(self, existing_book_id, new_chapters):
         existing_chapters = self.db.get_chapters(existing_book_id)
