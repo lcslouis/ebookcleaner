@@ -21,6 +21,9 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(1100, 700)
         self.resize(1280, 800)
 
+        from src.version import get_version
+        self.setWindowTitle(f"EbookCleaner  v{get_version()}")
+
         self.download_manager = DownloadManager(self)
         self.download_manager.book_saved.connect(self._on_background_book_saved)
         self.download_manager.active_count_changed.connect(self._on_active_downloads_changed)
@@ -216,10 +219,12 @@ class MainWindow(QMainWindow):
         dlg.exec()
 
     def _show_about(self):
+        from src.version import get_version
+        ver = get_version()
         QMessageBox.about(
             self,
             "About EbookCleaner",
-            "<b>EbookCleaner</b><br><br>"
+            f"<b>EbookCleaner</b> &nbsp; <small>v{ver}</small><br><br>"
             "An ebook management and processing tool.<br><br>"
             "<b>Import:</b><br>"
             "• Import EPUB / TXT files from disk<br>"

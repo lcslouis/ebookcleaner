@@ -17,6 +17,31 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # needed so git describe works for dev builds
+
+      - name: Resolve version
+        id: version
+        shell: pwsh
+        run: |
+          if ("${{ github.ref }}" -like "refs/tags/v*") {
+            $ver = "${{ github.ref_name }}".TrimStart("v")
+          } else {
+            # Dev build: use short SHA
+            $ver = "dev-$("${{ github.sha }}".Substring(0,7))"
+          }
+          echo "VERSION=$ver" >> $env:GITHUB_ENV
+          echo "version=$ver" >> $env:GITHUB_OUTPUT
+          Write-Host "Building version: $ver"
+
+      - name: Inject version into src/version.py
+        shell: pwsh
+        run: |
+          $ver = $env:VERSION
+          (Get-Content "src\version.py") `
+            -replace '__version__ = "dev"', "__version__ = `"$ver`"" |
+            Set-Content "src\version.py"
+          Write-Host "src/version.py patched to $ver"
 
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
@@ -34,26 +59,29 @@ jobs:
         run: pyinstaller ebookcleaner.spec --clean --noconfirm
 
       - name: Verify build output
+        shell: pwsh
         run: |
           if (Test-Path "dist\EbookCleaner\EbookCleaner.exe") {
-            Write-Host "Build successful"
             $size = (Get-Item "dist\EbookCleaner\EbookCleaner.exe").Length / 1MB
-            Write-Host "EXE size: $([math]::Round($size, 1)) MB"
+            Write-Host "Build successful — EXE size: $([math]::Round($size,1)) MB"
           } else {
             Write-Host "ERROR: EbookCleaner.exe not found"
             exit 1
           }
 
       - name: Create ZIP archive
+        shell: pwsh
         run: |
-          Compress-Archive -Path dist\EbookCleaner -DestinationPath dist\EbookCleaner-Windows.zip
-          $size = (Get-Item "dist\EbookCleaner-Windows.zip").Length / 1MB
-          Write-Host "ZIP size: $([math]::Round($size, 1)) MB"
+          $zip = "dist\EbookCleaner-Windows-$env:VERSION.zip"
+          Compress-Archive -Path dist\EbookCleaner -DestinationPath $zip
+          $size = (Get-Item $zip).Length / 1MB
+          Write-Host "ZIP: $zip  ($([math]::Round($size,1)) MB)"
+          echo "ZIP_PATH=$zip" >> $env:GITHUB_ENV
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: EbookCleaner-Windows
+          name: EbookCleaner-Windows-${{ env.VERSION }}
           path: dist/EbookCleaner/
           retention-days: 90
 
@@ -61,17 +89,18 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/EbookCleaner-Windows.zip
+          name: EbookCleaner ${{ env.VERSION }}
+          files: ${{ env.ZIP_PATH }}
           generate_release_notes: true
           body: |
-            ## EbookCleaner Windows Release
+            ## EbookCleaner ${{ env.VERSION }}
 
             ### Installation
-            1. Download `EbookCleaner-Windows.zip`
+            1. Download `EbookCleaner-Windows-${{ env.VERSION }}.zip`
             2. Extract the zip anywhere on your PC
             3. Run `EbookCleaner.exe` inside the extracted folder
             4. No Python or other installs required
 
             ### First run
-            - Go to **Settings** (toolbar) and enter your Anthropic API key to enable AI features
-            - Use **Import Book** to add EPUB or TXT files
+            - Go to **Settings** and enter your Anthropic API key to enable AI features
+            - Use **Import Book** to add EPUB / TXT files, or **Fetch from Web** for online sources
