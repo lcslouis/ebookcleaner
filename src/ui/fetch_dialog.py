@@ -91,11 +91,20 @@ class FetchDialog(QDialog):
         heading.setObjectName("heading")
         root.addWidget(heading)
 
-        supported = QLabel(
-            "Supported: Royal Road · FanFiction.net · Archive of Our Own · ScribbleHub · Any site (generic)"
-        )
+        from src.parsers.registry import list_supported_sites
+        sites = list_supported_sites()
+        site_names = " · ".join(s["name"] for s in sites[:12])
+        if len(sites) > 12:
+            site_names += f" · (+{len(sites) - 12} more)"
+        supported = QLabel(f"Supported ({len(sites)} sites): {site_names}")
         supported.setObjectName("subtext")
+        supported.setWordWrap(True)
         root.addWidget(supported)
+
+        view_sites_btn = QPushButton("View All Supported Sites")
+        view_sites_btn.setObjectName("secondary")
+        view_sites_btn.clicked.connect(self._show_supported_sites)
+        root.addWidget(view_sites_btn)
 
         sep = QFrame(); sep.setFrameShape(QFrame.HLine)
         root.addWidget(sep)
@@ -389,6 +398,40 @@ class FetchDialog(QDialog):
         if self._fetch_worker and self._fetch_worker.isRunning():
             self._fetch_worker.cancel()
         self.reject()
+
+    def _show_supported_sites(self):
+        from PySide6.QtWidgets import QDialog, QVBoxLayout, QTableWidget, QTableWidgetItem, QHeaderView, QPushButton, QHBoxLayout
+        from src.parsers.registry import list_supported_sites
+        sites = list_supported_sites()
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle(f"Supported Sites ({len(sites)})")
+        dlg.setMinimumSize(600, 500)
+        layout = QVBoxLayout(dlg)
+        layout.setContentsMargins(12, 12, 12, 12)
+
+        table = QTableWidget(len(sites), 2)
+        table.setHorizontalHeaderLabels(["Site Name", "Domains"])
+        table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        table.verticalHeader().setVisible(False)
+        table.setEditTriggers(QTableWidget.NoEditTriggers)
+        table.setSelectionMode(QTableWidget.SingleSelection)
+
+        for row, site in enumerate(sites):
+            table.setItem(row, 0, QTableWidgetItem(site["name"]))
+            table.setItem(row, 1, QTableWidgetItem(site["domains"]))
+
+        layout.addWidget(table)
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(dlg.accept)
+        btn_row.addWidget(close_btn)
+        layout.addLayout(btn_row)
+
+        dlg.exec()
 
     def _set_loading(self, loading: bool, msg: str = ""):
         self.load_btn.setEnabled(not loading)
