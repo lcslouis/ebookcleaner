@@ -1,6 +1,6 @@
 from PySide6.QtWidgets import (
-    QMainWindow, QWidget, QHBoxLayout, QSplitter, QToolBar,
-    QStatusBar, QLabel, QMessageBox
+    QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QSplitter, QToolBar,
+    QStatusBar, QLabel, QMessageBox, QFrame
 )
 from PySide6.QtCore import Qt, QSize
 from PySide6.QtGui import QAction
@@ -9,6 +9,8 @@ from src.ui.book_list_widget import BookListWidget
 from src.ui.book_editor_widget import BookEditorWidget
 from src.ui.import_dialog import ImportDialog
 from src.ui.settings_dialog import SettingsDialog
+from src.ui.download_manager import DownloadManager
+from src.ui.downloads_panel import DownloadsPanel
 
 
 class MainWindow(QMainWindow):
@@ -18,6 +20,11 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("EbookCleaner")
         self.setMinimumSize(1100, 700)
         self.resize(1280, 800)
+
+        self.download_manager = DownloadManager(self)
+        self.download_manager.book_saved.connect(self._on_background_book_saved)
+        self.download_manager.active_count_changed.connect(self._on_active_downloads_changed)
+
         self._build_ui()
         self._build_toolbar()
         self._build_statusbar()
@@ -25,10 +32,11 @@ class MainWindow(QMainWindow):
     def _build_ui(self):
         central = QWidget()
         self.setCentralWidget(central)
-        layout = QHBoxLayout(central)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
+        outer = QVBoxLayout(central)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
 
+        # Main content splitter (left library | right editor)
         splitter = QSplitter(Qt.Horizontal)
         splitter.setHandleWidth(1)
 
@@ -46,7 +54,16 @@ class MainWindow(QMainWindow):
         splitter.addWidget(self.editor)
 
         splitter.setSizes([250, 1030])
-        layout.addWidget(splitter)
+        outer.addWidget(splitter, 1)
+
+        # Downloads panel (hidden until first download starts)
+        sep = QFrame(); sep.setFrameShape(QFrame.HLine)
+        outer.addWidget(sep)
+
+        self.downloads_panel = DownloadsPanel(self.download_manager)
+        self.downloads_panel.setFixedHeight(170)
+        self.downloads_panel.setVisible(False)
+        outer.addWidget(self.downloads_panel)
 
     def _build_toolbar(self):
         tb = QToolBar("Main Toolbar")
@@ -61,7 +78,7 @@ class MainWindow(QMainWindow):
 
         fetch_action = QAction("Fetch from Web", self)
         fetch_action.setToolTip(
-            "Download an ebook directly from a URL (RoyalRoad, FanFiction.net, AO3, ScribbleHub, and more)"
+            "Download an ebook from a URL (RoyalRoad, FanFiction.net, AO3, ScribbleHub, and more)"
         )
         fetch_action.triggered.connect(self._fetch_from_web)
         tb.addAction(fetch_action)
@@ -82,6 +99,13 @@ class MainWindow(QMainWindow):
 
         tb.addSeparator()
 
+        self._downloads_action = QAction("Downloads", self)
+        self._downloads_action.setToolTip("Show / hide the downloads panel")
+        self._downloads_action.triggered.connect(self._toggle_downloads_panel)
+        tb.addAction(self._downloads_action)
+
+        tb.addSeparator()
+
         settings_action = QAction("Settings", self)
         settings_action.triggered.connect(self._open_settings)
         tb.addAction(settings_action)
@@ -97,6 +121,9 @@ class MainWindow(QMainWindow):
         self.setStatusBar(self.status_bar)
         self._status_label = QLabel("Ready")
         self.status_bar.addWidget(self._status_label)
+        self._dl_status_label = QLabel("")
+        self._dl_status_label.setObjectName("subtext")
+        self.status_bar.addPermanentWidget(self._dl_status_label)
 
     # ------------------------------------------------------------------ slots
 
@@ -119,7 +146,28 @@ class MainWindow(QMainWindow):
     def _on_chapter_saved(self):
         self._status_label.setText("Chapter saved")
 
+    def _on_background_book_saved(self, book_id):
+        """Called when a background download completes and saves a book."""
+        self.book_list.refresh()
+        # If this was an update for the currently open book, reload it
+        if getattr(self, "_current_book_id", None) == book_id:
+            self.editor.load_book(book_id)
+
+    def _on_active_downloads_changed(self, count: int):
+        if count > 0:
+            self._downloads_action.setText(f"Downloads ({count})")
+            self._dl_status_label.setText(f"  {count} download(s) running")
+            # Auto-show the panel when downloads start
+            if not self.downloads_panel.isVisible():
+                self.downloads_panel.setVisible(True)
+        else:
+            self._downloads_action.setText("Downloads")
+            self._dl_status_label.setText("")
+
     # ------------------------------------------------------------------ actions
+
+    def _toggle_downloads_panel(self):
+        self.downloads_panel.setVisible(not self.downloads_panel.isVisible())
 
     def _import_book(self):
         dlg = ImportDialog(self.db, self)
@@ -128,7 +176,7 @@ class MainWindow(QMainWindow):
 
     def _fetch_from_web(self):
         from src.ui.fetch_dialog import FetchDialog
-        dlg = FetchDialog(self.db, self)
+        dlg = FetchDialog(self.db, self, download_manager=self.download_manager)
         if dlg.exec():
             self._after_import(dlg.imported_book_id, "Web fetch complete")
 
@@ -139,7 +187,9 @@ class MainWindow(QMainWindow):
 
     def _update_from_web(self, book_id):
         from src.ui.fetch_dialog import FetchDialog
-        dlg = FetchDialog(self.db, self, update_book_id=book_id)
+        dlg = FetchDialog(self.db, self,
+                          update_book_id=book_id,
+                          download_manager=self.download_manager)
         if dlg.exec():
             self._after_import(dlg.imported_book_id, "Book updated")
 

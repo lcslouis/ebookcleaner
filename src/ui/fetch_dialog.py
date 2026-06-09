@@ -7,8 +7,11 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QThread, QObject, Signal, Slot
 from PySide6.QtGui import QColor, QBrush
 
+# Worker classes live in download_manager to be shared with background tasks
+from src.ui.download_manager import _FetchWorker, _FetchSignals
 
-# ------------------------------------------------------------------ workers
+
+# ------------------------------------------------------------------ TOC worker (dialog-only)
 
 class _TocSignals(QObject):
     finished = Signal(dict)
@@ -30,50 +33,17 @@ class _TocWorker(QThread):
             self.signals.error.emit(str(e))
 
 
-class _FetchSignals(QObject):
-    chapter_done = Signal(int, int, str)   # index, total, title
-    finished = Signal(list)               # list of {title, content, url}
-    error = Signal(str)
-
-
-class _FetchWorker(QThread):
-    def __init__(self, fetcher, chapter_list):
-        super().__init__()
-        self.fetcher = fetcher
-        self.chapter_list = chapter_list
-        self.signals = _FetchSignals()
-        self._cancelled = False
-
-    def cancel(self):
-        self._cancelled = True
-
-    def run(self):
-        results = []
-        total = len(self.chapter_list)
-        for i, ch in enumerate(self.chapter_list):
-            if self._cancelled:
-                break
-            try:
-                content = self.fetcher.fetch_chapter(ch["url"])
-            except Exception as e:
-                content = f"[Error fetching chapter: {e}]"
-            results.append({"title": ch["title"], "content": content, "url": ch["url"]})
-            self.signals.chapter_done.emit(i + 1, total, ch["title"])
-        self.signals.finished.emit(results)
-
-
 # ------------------------------------------------------------------ dialog
 
 class FetchDialog(QDialog):
-    def __init__(self, db, parent=None, update_book_id=None):
+    def __init__(self, db, parent=None, update_book_id=None, download_manager=None):
         super().__init__(parent)
         self.db = db
-        self._update_book_id = update_book_id   # None = new book, int = update existing
-        self._toc_worker = None
-        self._fetch_worker = None
-        self._toc_info = None
-        self._cover_data = None
-        self._cover_mime = None
+        self._update_book_id   = update_book_id
+        self._download_manager = download_manager
+        self._toc_worker    = None
+        self._fetch_worker  = None
+        self._toc_info      = None
         self.imported_book_id = None
 
         title = "Update Book from Web" if update_book_id else "Fetch from Web"
@@ -235,8 +205,23 @@ class FetchDialog(QDialog):
         self.cancel_btn.setObjectName("secondary")
         self.cancel_btn.clicked.connect(self._cancel)
         bottom_row.addWidget(self.cancel_btn)
-        btn_label = "Fetch New Chapters" if self._update_book_id else "Fetch & Import"
-        self.fetch_btn = QPushButton(btn_label)
+
+        if self._download_manager:
+            bg_label = "Update in Background" if self._update_book_id else "Fetch in Background"
+            self.bg_btn = QPushButton(bg_label)
+            self.bg_btn.setObjectName("secondary")
+            self.bg_btn.setEnabled(False)
+            self.bg_btn.setToolTip(
+                "Start downloading and close this window — "
+                "track progress in the Downloads panel"
+            )
+            self.bg_btn.clicked.connect(self._start_background)
+            bottom_row.addWidget(self.bg_btn)
+        else:
+            self.bg_btn = None
+
+        fg_label = "Fetch New Chapters" if self._update_book_id else "Fetch & Import"
+        self.fetch_btn = QPushButton(fg_label)
         self.fetch_btn.setEnabled(False)
         self.fetch_btn.clicked.connect(self._start_fetch)
         bottom_row.addWidget(self.fetch_btn)
@@ -380,7 +365,10 @@ class FetchDialog(QDialog):
         else:
             self.ch_count_label.setText(f"{count} found")
 
-        self.fetch_btn.setEnabled(new_count > 0 if self._update_book_id else count > 0)
+        enabled = (new_count > 0 if self._update_book_id else count > 0)
+        self.fetch_btn.setEnabled(enabled)
+        if self.bg_btn:
+            self.bg_btn.setEnabled(enabled)
         self._update_selected_count()
 
     def _update_selected_count(self):
@@ -393,7 +381,10 @@ class FetchDialog(QDialog):
             self.ch_count_label.setText(f"{checked} selected to add")
         else:
             self.ch_count_label.setText(f"{checked}/{total} selected")
-        self.fetch_btn.setEnabled(checked > 0)
+        enabled = checked > 0
+        self.fetch_btn.setEnabled(enabled)
+        if self.bg_btn:
+            self.bg_btn.setEnabled(enabled)
 
     def _select_all(self):
         self.chapter_list.blockSignals(True)
@@ -410,17 +401,14 @@ class FetchDialog(QDialog):
         self._update_selected_count()
 
     def _start_fetch(self):
-        selected = []
-        for i in range(self.chapter_list.count()):
-            item = self.chapter_list.item(i)
-            if item.checkState() == Qt.Checked:
-                selected.append(item.data(Qt.UserRole))
-
+        selected = self._get_selected_chapters()
         if not selected:
             QMessageBox.warning(self, "No Chapters", "Select at least one chapter.")
             return
 
         self.fetch_btn.setEnabled(False)
+        if self.bg_btn:
+            self.bg_btn.setEnabled(False)
         self.load_btn.setEnabled(False)
         self.progress_bar.setVisible(True)
         self.progress_bar.setMaximum(len(selected))
@@ -525,6 +513,40 @@ class FetchDialog(QDialog):
             f"{len(new_chapters)} new chapter(s) added to the library."
         )
         self.accept()
+
+    def _start_background(self):
+        """Hand off to DownloadManager and close the dialog immediately."""
+        selected = self._get_selected_chapters()
+        if not selected:
+            QMessageBox.warning(self, "No Chapters", "Select at least one chapter.")
+            return
+
+        from src.web_fetcher import WebFetcher
+        from src.ui.download_manager import DownloadTask
+        selector = self.selector_edit.text().strip() if self._adv_group.isChecked() else ""
+        fetcher = WebFetcher(delay=self.delay_spin.value(), content_selector=selector)
+
+        task = DownloadTask(
+            db=self.db,
+            fetcher=fetcher,
+            selected_chapters=selected,
+            toc_info=self._toc_info,
+            update_book_id=self._update_book_id,
+            cover_data=self.cover_picker.get_cover_data(),
+            cover_mime=self.cover_picker.get_cover_mime(),
+            custom_title=self.title_edit.text().strip(),
+            custom_author=self.author_edit.text().strip(),
+            source_url=self.url_edit.text().strip(),
+        )
+        self._download_manager.add_task(task)
+        self.reject()   # close dialog; task keeps running independently
+
+    def _get_selected_chapters(self) -> list:
+        return [
+            self.chapter_list.item(i).data(Qt.UserRole)
+            for i in range(self.chapter_list.count())
+            if self.chapter_list.item(i).checkState() == Qt.Checked
+        ]
 
     def _save_cover_file(self, book_id, data, mime):
         from pathlib import Path
