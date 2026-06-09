@@ -2,18 +2,17 @@
 NovelBin parser (novelbin.com and mirror domains).
 
 Chapter URL pattern:  /b/{novel-slug}/{chapter-slug}
-ToC URL pattern:      /b/{novel-slug}   (chapters in #tab-chapters-title tab)
+ToC URL pattern:      /b/{novel-slug}
 
-The chapter list tab is populated via AJAX after page load, so the static
-HTML typically has no <a> links for chapters. Strategy:
-  1. Try static HTML selectors in #tab-chapters-title (sometimes present).
-  2. Extract the numeric novel ID from the page, then call the AJAX archive
-     endpoint: GET /ajax/chapter-archive?novelId={id}
-     which returns an HTML fragment of <li><a href=...> entries.
-  3. Fall back to any /b/{slug}/chapter-* links found in the page.
+The first ~30 chapters are embedded in a <template data-first-chapter-template>
+element inside #chapter-archive.  The full list requires an AJAX call:
 
-Chapter content lives in div#chr-content. Ads and navigation injected inside
-that div are stripped before returning text.
+  GET /ajax/chapter-archive?novelId={slug}&_csrf={token}
+
+where {slug} is the URL slug (NOT a numeric ID) and {token} is extracted
+from an inline <script> const csrf = "...".
+
+Chapter content lives in div#chr-content or div.chr-c.
 """
 import re
 import requests
@@ -47,38 +46,49 @@ class NovelBinParser(BaseParser):
     # ------------------------------------------------------------------ ToC
 
     def get_book_info(self, url: str, soup) -> dict:
-        # Normalise: strip fragment (#tab-chapters-title etc.)
         base_url = url.split("#")[0].rstrip("/")
 
-        title = self.first_text(
-            soup,
-            "div.book-info h3.title",
-            "h3.title",
-            "h1",
+        # Title: <h3 class="title" itemprop="name"> inside div.desc
+        title = (
+            self.first_text(soup, "h3.title[itemprop='name']", "h3.title", "h1.title", "h1")
         )
-        author = self.first_text(
+
+        # Author: og:novel:author meta tag is most reliable
+        author_meta = soup.find("meta", {"property": "og:novel:author"})
+        author = (author_meta.get("content", "").strip() if author_meta else "") or self.first_text(
             soup,
-            "div.book-info a.info-author",
+            "ul.info li a[href*='/a/']",
             "a.info-author",
             "span.author a",
         )
+
+        # Description: div#novel-description-content (real id from HTML source)
         description = self.first_text(
             soup,
+            "#novel-description-content",
             "div.desc-text",
             "div.book-intro p",
-            "div.summary__content",
         )
+
+        # Tags: og:novel:genre meta tag
+        genre_meta = soup.find("meta", {"property": "og:novel:genre"})
+        tags = genre_meta.get("content", "").strip() if genre_meta else ""
+
+        # Cover: lazy-loaded <img class="lazy" data-src="..."> inside div.book
         cover_url = ""
-        for sel in ["div.book-img img", "div.book-image img", "img.cover"]:
+        for sel in ["div.book img.lazy", "div.book-img img", "div.book-image img", "img.cover"]:
             el = soup.select_one(sel)
             if el:
-                src = el.get("src") or el.get("data-src") or el.get("data-lazy-src") or ""
+                src = (
+                    el.get("data-src") or el.get("data-lazy-src") or
+                    el.get("src") or ""
+                )
                 if src:
                     cover_url = self.absolute_url(base_url, src)
                     break
 
         chapters = (
-            self._chapters_from_static(soup, base_url) or
+            self._chapters_from_template(soup, base_url) or
             self._chapters_from_ajax(soup, base_url)
         )
 
@@ -87,7 +97,7 @@ class NovelBinParser(BaseParser):
             "author": author,
             "description": description,
             "cover_url": cover_url,
-            "tags": "",
+            "tags": tags,
             "chapters": chapters,
         }
 
@@ -100,7 +110,6 @@ class NovelBinParser(BaseParser):
         if not content:
             return self.element_to_text(soup.find("body"))
 
-        # Strip injected ads, navigation banners, and inline script blocks
         for unwanted in content.select(
             "div.ads, div[id*='ads'], ins.adsbygoogle, "
             "div.chapter-nav, div.navigator, "
@@ -109,7 +118,6 @@ class NovelBinParser(BaseParser):
         ):
             unwanted.decompose()
 
-        # Remove lines that are purely navigation text
         _NAV_PATTERN = re.compile(
             r"^\s*(previous|next|chapter|prev|←|→|«|»)\s*$", re.IGNORECASE
         )
@@ -121,16 +129,29 @@ class NovelBinParser(BaseParser):
 
     # ------------------------------------------------------------------ helpers
 
-    def _chapters_from_static(self, soup, base_url: str) -> list:
-        """Try the #tab-chapters-title panel which may have static links."""
-        tab = soup.select_one("#tab-chapters-title")
-        if tab:
-            links = tab.select("li a[href]")
+    def _chapters_from_template(self, soup, base_url: str) -> list:
+        """
+        Read the static chapter list embedded in:
+          <template data-first-chapter-template>
+            <li data-first-chapter-item><a href="/b/slug/chapter-...">
+        BeautifulSoup with lxml treats <template> as a regular tag,
+        so its children are directly accessible.
+        """
+        # Primary: template inside #chapter-archive
+        template = soup.select_one("#chapter-archive template[data-first-chapter-template]")
+        if not template:
+            template = soup.select_one("template[data-first-chapter-template]")
+
+        if template:
+            links = template.select("li[data-first-chapter-item] a[href]")
+            if not links:
+                links = template.select("li a[href]")
             if links:
                 return self._links_to_list(links, base_url)
 
-        # Also try the generic list selectors in case tab isn't used
-        for sel in ["ul.list-chapter li a", "#list-chapter li a", "ul.list-chapter a"]:
+        # Fallback: static list selectors (older site versions)
+        for sel in ["#tab-chapters ul.list-chapter li a", "ul.list-chapter li a",
+                    "#list-chapter li a"]:
             links = soup.select(sel)
             if links:
                 return self._links_to_list(links, base_url)
@@ -139,71 +160,59 @@ class NovelBinParser(BaseParser):
 
     def _chapters_from_ajax(self, soup, base_url: str) -> list:
         """
-        Extract the numeric novel ID then call:
-          GET {origin}/ajax/chapter-archive?novelId={id}
-        Returns the HTML fragment, parse <li><a> from it.
+        Call GET /ajax/chapter-archive?novelId={slug}&_csrf={token}
+        The slug is the URL path segment after /b/.
+        The CSRF token is extracted from an inline <script>.
         """
-        novel_id = self._extract_novel_id(soup, base_url)
-        if not novel_id:
+        slug = self._extract_slug(base_url)
+        if not slug:
             return []
 
-        # Derive origin (https://novelbin.com)
+        csrf = self._extract_csrf(soup)
         m = re.match(r"(https?://[^/]+)", base_url)
         origin = m.group(1) if m else "https://novelbin.com"
-        ajax_url = f"{origin}/ajax/chapter-archive?novelId={novel_id}"
 
+        params = {"novelId": slug}
+        if csrf:
+            params["_csrf"] = csrf
+
+        ajax_url = f"{origin}/ajax/chapter-archive"
         try:
-            resp = requests.get(ajax_url, headers=_HEADERS, timeout=20)
+            resp = requests.get(ajax_url, params=params, headers=_HEADERS, timeout=20)
             resp.raise_for_status()
         except Exception:
             return []
 
         from bs4 import BeautifulSoup
         frag = BeautifulSoup(resp.text, "lxml")
-        links = frag.select("li a[href]")
+
+        # AJAX response may also use <template> or direct <li> elements
+        template = frag.select_one("template[data-first-chapter-template]")
+        if template:
+            links = template.select("li a[href]")
+        else:
+            links = frag.select("li a[href]")
         if not links:
-            # Some responses wrap differently
             links = frag.find_all("a", href=True)
+
         return self._links_to_list(links, base_url)
 
-    def _extract_novel_id(self, soup, base_url: str) -> str:
-        """Find the numeric novel ID that NovelBin needs for its AJAX endpoint."""
+    def _extract_slug(self, base_url: str) -> str:
+        """Extract the novel slug from the URL: /b/{slug} → slug."""
+        m = re.search(r"/b/([^/?#]+)", base_url)
+        return m.group(1) if m else ""
 
-        # 1. data-novel-id / data-id on the chapter tab button or body
-        for attr in ["data-novel-id", "data-id", "data-bookid"]:
-            el = soup.select_one(f"[{attr}]")
-            if el:
-                val = el.get(attr, "").strip()
-                if val.isdigit():
-                    return val
-
-        # 2. Hidden input field
-        inp = soup.find("input", {"name": re.compile(r"novel[_-]?id", re.IGNORECASE)})
-        if inp:
-            val = (inp.get("value") or "").strip()
-            if val.isdigit():
-                return val
-
-        # 3. JavaScript variable in inline <script> tags
-        _JS_PATTERNS = [
-            r'novel[_-]?id\s*[=:]\s*["\']?(\d+)',
-            r'bookId\s*[=:]\s*["\']?(\d+)',
-            r'"id"\s*:\s*"?(\d+)"?\s*,\s*"title"',
-        ]
+    def _extract_csrf(self, soup) -> str:
+        """Find CSRF token from inline JS: const csrf = "..."."""
         for script in soup.find_all("script"):
             text = script.string or ""
-            for pat in _JS_PATTERNS:
-                m = re.search(pat, text, re.IGNORECASE)
-                if m:
-                    return m.group(1)
-
-        # 4. Canonical URL or og:url may encode the ID
-        canonical = soup.find("link", {"rel": "canonical"})
-        if canonical:
-            m = re.search(r"/b/[^/]+-(\d+)(?:/|$)", canonical.get("href", ""))
+            m = re.search(r'const\s+csrf\s*=\s*["\']([^"\']+)["\']', text)
             if m:
                 return m.group(1)
-
+        # Also check data attribute on hidden input
+        inp = soup.find("input", {"name": re.compile(r"_csrf|csrf", re.IGNORECASE)})
+        if inp:
+            return (inp.get("value") or "").strip()
         return ""
 
     def _links_to_list(self, link_els, base_url: str) -> list:
@@ -213,7 +222,6 @@ class NovelBinParser(BaseParser):
             href = a.get("href", "")
             if not href or href.startswith("#"):
                 continue
-            # Only follow /b/{slug}/chapter-* paths
             if "/b/" not in href and not href.startswith("http"):
                 continue
             full = self.absolute_url(base_url, href)
