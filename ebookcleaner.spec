@@ -9,15 +9,23 @@ anthropic_datas, anthropic_bins, anthropic_hidden = collect_all('anthropic')
 httpx_datas, httpx_bins, httpx_hidden = collect_all('httpx')
 httpcore_datas, httpcore_bins, httpcore_hidden = collect_all('httpcore')
 certifi_datas, certifi_bins, certifi_hidden = collect_all('certifi')
+requests_datas, requests_bins, requests_hidden = collect_all('requests')
+bs4_datas, bs4_bins, bs4_hidden = collect_all('bs4')
+lxml_datas, lxml_bins, lxml_hidden = collect_all('lxml')
 
 all_datas = (
     ebooklib_datas + anthropic_datas + httpx_datas +
-    httpcore_datas + certifi_datas
+    httpcore_datas + certifi_datas + requests_datas +
+    bs4_datas + lxml_datas
 )
-all_bins = ebooklib_bins + anthropic_bins + httpx_bins + httpcore_bins + certifi_bins
+all_bins = (
+    ebooklib_bins + anthropic_bins + httpx_bins + httpcore_bins +
+    certifi_bins + requests_bins + bs4_bins + lxml_bins
+)
 all_hidden = (
     ebooklib_hidden + anthropic_hidden + httpx_hidden +
-    httpcore_hidden + certifi_hidden + [
+    httpcore_hidden + certifi_hidden + requests_hidden +
+    bs4_hidden + lxml_hidden + [
         'PySide6.QtCore',
         'PySide6.QtWidgets',
         'PySide6.QtGui',
@@ -30,6 +38,14 @@ all_hidden = (
         'lxml',
         'lxml.etree',
         'lxml._elementpath',
+        'lxml.html',
+        'bs4',
+        'bs4.builder._lxml',
+        'bs4.builder._htmlparser',
+        'requests',
+        'urllib3',
+        'charset_normalizer',
+        'idna',
         'email',
         'email.mime',
         'email.mime.multipart',

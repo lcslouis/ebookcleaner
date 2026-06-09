@@ -23,6 +23,8 @@ class Database:
                 title TEXT NOT NULL,
                 author TEXT DEFAULT '',
                 description TEXT DEFAULT '',
+                source_url TEXT DEFAULT '',
+                cover_url TEXT DEFAULT '',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
@@ -60,33 +62,44 @@ class Database:
             );
         """)
         c.commit()
+        # Migrate existing databases to add new columns (idempotent)
+        self._migrate()
+
+    def _migrate(self):
+        existing = {row[1] for row in self.conn.execute("PRAGMA table_info(books)").fetchall()}
+        for col, defn in [("source_url", "TEXT DEFAULT ''"), ("cover_url", "TEXT DEFAULT ''")]:
+            if col not in existing:
+                self.conn.execute(f"ALTER TABLE books ADD COLUMN {col} {defn}")
+        self.conn.commit()
 
     # --- Books ---
 
     def get_all_books(self):
         cur = self.conn.execute(
-            "SELECT id, title, author, description, created_at, updated_at FROM books ORDER BY updated_at DESC"
+            "SELECT id, title, author, description, source_url, cover_url, created_at, updated_at"
+            " FROM books ORDER BY updated_at DESC"
         )
         return [dict(row) for row in cur.fetchall()]
 
     def get_book(self, book_id):
         cur = self.conn.execute(
-            "SELECT id, title, author, description, created_at, updated_at FROM books WHERE id = ?",
+            "SELECT id, title, author, description, source_url, cover_url, created_at, updated_at"
+            " FROM books WHERE id = ?",
             (book_id,)
         )
         row = cur.fetchone()
         return dict(row) if row else None
 
-    def add_book(self, title, author="", description=""):
+    def add_book(self, title, author="", description="", source_url="", cover_url=""):
         cur = self.conn.execute(
-            "INSERT INTO books (title, author, description) VALUES (?, ?, ?)",
-            (title, author, description)
+            "INSERT INTO books (title, author, description, source_url, cover_url) VALUES (?, ?, ?, ?, ?)",
+            (title, author, description, source_url, cover_url)
         )
         self.conn.commit()
         return cur.lastrowid
 
     def update_book(self, book_id, **kwargs):
-        allowed = {"title", "author", "description"}
+        allowed = {"title", "author", "description", "source_url", "cover_url"}
         fields = {k: v for k, v in kwargs.items() if k in allowed}
         if not fields:
             return

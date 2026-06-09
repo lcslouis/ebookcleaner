@@ -53,9 +53,25 @@ class MainWindow(QMainWindow):
         tb.setIconSize(QSize(16, 16))
         self.addToolBar(tb)
 
-        import_action = QAction("Import Book", self)
+        import_action = QAction("Import File", self)
+        import_action.setToolTip("Import EPUB or TXT file from disk")
         import_action.triggered.connect(self._import_book)
         tb.addAction(import_action)
+
+        fetch_action = QAction("Fetch from Web", self)
+        fetch_action.setToolTip(
+            "Download an ebook directly from a URL (RoyalRoad, FanFiction.net, AO3, ScribbleHub, and more)"
+        )
+        fetch_action.triggered.connect(self._fetch_from_web)
+        tb.addAction(fetch_action)
+
+        tb.addSeparator()
+
+        self._export_action = QAction("Export EPUB", self)
+        self._export_action.setToolTip("Export the current book to an EPUB file")
+        self._export_action.setEnabled(False)
+        self._export_action.triggered.connect(self._export_epub)
+        tb.addAction(self._export_action)
 
         tb.addSeparator()
 
@@ -75,27 +91,55 @@ class MainWindow(QMainWindow):
         self._status_label = QLabel("Ready")
         self.status_bar.addWidget(self._status_label)
 
+    # ------------------------------------------------------------------ slots
+
     def _on_book_selected(self, book_id):
+        self._current_book_id = book_id
         self.editor.load_book(book_id)
+        self._export_action.setEnabled(True)
         book = self.db.get_book(book_id)
         if book:
             self._status_label.setText(f"Loaded: {book['title']}")
 
     def _on_book_deleted(self, book_id):
         self.editor._show_empty()
+        self._export_action.setEnabled(False)
+        self._current_book_id = None
         self._status_label.setText("Book deleted")
 
     def _on_chapter_saved(self):
         self._status_label.setText("Chapter saved")
 
+    # ------------------------------------------------------------------ actions
+
     def _import_book(self):
         dlg = ImportDialog(self.db, self)
         if dlg.exec():
-            self.book_list.refresh()
-            if dlg.imported_book_id:
-                self.book_list.select_book(dlg.imported_book_id)
-                self.editor.load_book(dlg.imported_book_id)
-            self._status_label.setText("Import complete")
+            self._after_import(dlg.imported_book_id, "Import complete")
+
+    def _fetch_from_web(self):
+        from src.ui.fetch_dialog import FetchDialog
+        dlg = FetchDialog(self.db, self)
+        if dlg.exec():
+            self._after_import(dlg.imported_book_id, "Web fetch complete")
+
+    def _after_import(self, book_id, msg):
+        self.book_list.refresh()
+        if book_id:
+            self.book_list.select_book(book_id)
+            self.editor.load_book(book_id)
+            self._current_book_id = book_id
+            self._export_action.setEnabled(True)
+        self._status_label.setText(msg)
+
+    def _export_epub(self):
+        book_id = getattr(self, "_current_book_id", None)
+        if not book_id:
+            QMessageBox.warning(self, "No Book", "Select a book first.")
+            return
+        from src.ui.export_dialog import ExportDialog
+        dlg = ExportDialog(self.db, book_id, self)
+        dlg.exec()
 
     def _open_settings(self):
         dlg = SettingsDialog(self.db, self)
@@ -106,14 +150,18 @@ class MainWindow(QMainWindow):
             self,
             "About EbookCleaner",
             "<b>EbookCleaner</b><br><br>"
-            "An ebook management tool for cleaning, proofreading, and rewriting ebooks.<br><br>"
-            "Features:<br>"
-            "• Import EPUB and TXT ebooks<br>"
-            "• Rule-based text cleaning<br>"
-            "• AI-powered grammar correction and rewriting<br>"
-            "• Version management and chapter merging<br><br>"
-            "Requires an Anthropic API key for AI features.<br>"
-            "Configure in Settings.",
+            "An ebook management and processing tool.<br><br>"
+            "<b>Import:</b><br>"
+            "• Import EPUB / TXT files from disk<br>"
+            "• Fetch directly from Royal Road, FanFiction.net, AO3, ScribbleHub, or any URL<br><br>"
+            "<b>Process:</b><br>"
+            "• Rule-based text cleaning (page numbers, OCR artifacts, broken hyphenation)<br>"
+            "• AI grammar correction and full rewriting (Anthropic API)<br><br>"
+            "<b>Manage:</b><br>"
+            "• Book library with version tracking<br>"
+            "• Import updated versions and merge new chapters<br>"
+            "• Export processed books to EPUB with cover image<br><br>"
+            "Configure your Anthropic API key in <b>Settings</b>.",
         )
 
     def closeEvent(self, event):
