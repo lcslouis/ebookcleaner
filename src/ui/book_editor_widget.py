@@ -442,7 +442,10 @@ class BookEditorWidget(QWidget):
                     f"Please configure your {name} API key in Settings.\nGet it at {url}",
                 )
                 return None
-            return AIProcessor(provider=provider, api_key=api_key)
+            kwargs = {"provider": provider, "api_key": api_key}
+            if provider == PROVIDER_GEMINI:
+                kwargs["gemini_model"] = self.db.get_setting("gemini_model", "gemini-2.5-flash")
+            return AIProcessor(**kwargs)
 
         if provider == PROVIDER_OLLAMA:
             host  = self.db.get_setting("ollama_host",  "http://localhost:11434")

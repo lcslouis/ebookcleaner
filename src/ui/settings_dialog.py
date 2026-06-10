@@ -91,6 +91,11 @@ class SettingsDialog(QDialog):
         self.api_key_edit.setEchoMode(QLineEdit.Password)
         self.form.addRow(self.api_key_label, self.api_key_edit)
 
+        self.gemini_model_label = QLabel("Model:")
+        self.gemini_model_edit  = QLineEdit()
+        self.gemini_model_edit.setPlaceholderText("gemini-2.5-flash")
+        self.form.addRow(self.gemini_model_label, self.gemini_model_edit)
+
         self.ollama_host_label = QLabel("Server URL:")
         self.ollama_host_edit  = QLineEdit()
         self.ollama_host_edit.setPlaceholderText("http://localhost:11434")
@@ -138,6 +143,9 @@ class SettingsDialog(QDialog):
             PROVIDER_GEMINI:    self.db.get_setting("gemini_api_key", ""),
             PROVIDER_GROQ:      self.db.get_setting("groq_api_key", ""),
         }
+        self.gemini_model_edit.setText(
+            self.db.get_setting("gemini_model", "gemini-2.5-flash")
+        )
         self.ollama_host_edit.setText(
             self.db.get_setting("ollama_host", "http://localhost:11434")
         )
@@ -165,6 +173,8 @@ class SettingsDialog(QDialog):
         self.db.set_setting("anthropic_api_key", self._keys.get(PROVIDER_ANTHROPIC, ""))
         self.db.set_setting("gemini_api_key",    self._keys.get(PROVIDER_GEMINI, ""))
         self.db.set_setting("groq_api_key",      self._keys.get(PROVIDER_GROQ, ""))
+        self.db.set_setting("gemini_model",
+                            self.gemini_model_edit.text().strip() or "gemini-2.5-flash")
         self.db.set_setting("ollama_host",
                             self.ollama_host_edit.text().strip() or "http://localhost:11434")
         self.db.set_setting("ollama_model",
@@ -186,9 +196,12 @@ class SettingsDialog(QDialog):
 
     def _apply_provider_ui(self, provider: str):
         is_ollama = (provider == PROVIDER_OLLAMA)
+        is_gemini = (provider == PROVIDER_GEMINI)
 
         for w in (self.api_key_label, self.api_key_edit):
             w.setVisible(not is_ollama)
+        for w in (self.gemini_model_label, self.gemini_model_edit):
+            w.setVisible(is_gemini)
         for w in (self.ollama_host_label, self.ollama_host_edit,
                   self.ollama_model_label, self.ollama_model_edit):
             w.setVisible(is_ollama)
@@ -207,6 +220,13 @@ class SettingsDialog(QDialog):
             host  = self.ollama_host_edit.text().strip() or "http://localhost:11434"
             model = self.ollama_model_edit.text().strip() or "llama3.1"
             proc  = AIProcessor(provider=provider, ollama_host=host, ollama_model=model)
+        elif provider == PROVIDER_GEMINI:
+            key = self.api_key_edit.text().strip()
+            if not key:
+                QMessageBox.warning(self, "No Key", "Please enter an API key first.")
+                return
+            gmodel = self.gemini_model_edit.text().strip() or "gemini-2.5-flash"
+            proc = AIProcessor(provider=provider, api_key=key, gemini_model=gmodel)
         else:
             key = self.api_key_edit.text().strip()
             if not key:

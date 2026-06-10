@@ -6,7 +6,7 @@ PROVIDER_GROQ      = "groq"
 PROVIDER_OLLAMA    = "ollama"
 
 ANTHROPIC_MODEL = "claude-haiku-4-5-20251001"
-GEMINI_MODEL    = "gemini-2.0-flash"
+GEMINI_MODEL    = "gemini-2.5-flash"
 GROQ_MODEL      = "llama-3.3-70b-versatile"
 
 MAX_CHUNK = 80_000
@@ -31,10 +31,12 @@ REWRITE_SYSTEM = (
 
 class AIProcessor:
     def __init__(self, provider: str = PROVIDER_ANTHROPIC, api_key: str = "",
+                 gemini_model: str = "",
                  ollama_host: str = "http://localhost:11434",
                  ollama_model: str = "llama3.1"):
         self.provider     = provider
         self.api_key      = api_key
+        self.gemini_model = gemini_model or GEMINI_MODEL
         self.ollama_host  = ollama_host.rstrip("/")
         self.ollama_model = ollama_model
         self._client      = None
@@ -87,7 +89,7 @@ class AIProcessor:
             elif self.provider == PROVIDER_GEMINI:
                 from google.genai import types as _gtypes
                 client.models.generate_content(
-                    model=GEMINI_MODEL,
+                    model=self.gemini_model,
                     contents="Hi",
                     config=_gtypes.GenerateContentConfig(max_output_tokens=10),
                 )
@@ -153,7 +155,7 @@ class AIProcessor:
                 elif self.provider == PROVIDER_GEMINI:
                     from google.genai import types as _gtypes
                     response = client.models.generate_content(
-                        model=GEMINI_MODEL,
+                        model=self.gemini_model,
                         contents=text,
                         config=_gtypes.GenerateContentConfig(
                             system_instruction=system,
