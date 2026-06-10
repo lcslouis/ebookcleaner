@@ -1,4 +1,4 @@
-name: Build Windows Executable
+name: Build Windows Executables
 
 on:
   push:
@@ -30,7 +30,6 @@ jobs:
           if ("${{ github.ref }}" -like "refs/tags/v*") {
             $ver = "${{ github.ref_name }}".TrimStart("v")
           } else {
-            # Dev build: use short SHA
             $ver = "dev-$("${{ github.sha }}".Substring(0,7))"
           }
           echo "VERSION=$ver" >> $env:GITHUB_ENV
@@ -58,52 +57,98 @@ jobs:
           pip install -r requirements.txt
           pip install pyinstaller
 
-      - name: Build executable with PyInstaller
+      # ------------------------------------------------------------------ EbookCleaner
+
+      - name: Build EbookCleaner
         run: pyinstaller ebookcleaner.spec --clean --noconfirm
 
-      - name: Verify build output
+      - name: Verify EbookCleaner build
         shell: pwsh
         run: |
           if (Test-Path "dist\EbookCleaner\EbookCleaner.exe") {
             $size = (Get-Item "dist\EbookCleaner\EbookCleaner.exe").Length / 1MB
-            Write-Host "Build successful — EXE size: $([math]::Round($size,1)) MB"
+            Write-Host "EbookCleaner — EXE size: $([math]::Round($size,1)) MB"
           } else {
             Write-Host "ERROR: EbookCleaner.exe not found"
             exit 1
           }
 
-      - name: Create ZIP archive
+      - name: ZIP EbookCleaner
         shell: pwsh
         run: |
           $zip = "dist\EbookCleaner-Windows-$env:VERSION.zip"
           Compress-Archive -Path dist\EbookCleaner -DestinationPath $zip
           $size = (Get-Item $zip).Length / 1MB
           Write-Host "ZIP: $zip  ($([math]::Round($size,1)) MB)"
-          echo "ZIP_PATH=$zip" >> $env:GITHUB_ENV
+          echo "CLEANER_ZIP=$zip" >> $env:GITHUB_ENV
 
-      - name: Upload build artifact
+      - name: Upload EbookCleaner artifact
         uses: actions/upload-artifact@v4
         with:
           name: EbookCleaner-Windows-${{ env.VERSION }}
           path: dist/EbookCleaner/
           retention-days: 90
 
+      # ------------------------------------------------------------------ Provider Studio
+
+      - name: Build Provider Studio
+        run: pyinstaller provider_studio.spec --clean --noconfirm
+
+      - name: Verify Provider Studio build
+        shell: pwsh
+        run: |
+          if (Test-Path "dist\ProviderStudio\ProviderStudio.exe") {
+            $size = (Get-Item "dist\ProviderStudio\ProviderStudio.exe").Length / 1MB
+            Write-Host "ProviderStudio — EXE size: $([math]::Round($size,1)) MB"
+          } else {
+            Write-Host "ERROR: ProviderStudio.exe not found"
+            exit 1
+          }
+
+      - name: ZIP Provider Studio
+        shell: pwsh
+        run: |
+          $zip = "dist\ProviderStudio-Windows-$env:VERSION.zip"
+          Compress-Archive -Path dist\ProviderStudio -DestinationPath $zip
+          $size = (Get-Item $zip).Length / 1MB
+          Write-Host "ZIP: $zip  ($([math]::Round($size,1)) MB)"
+          echo "STUDIO_ZIP=$zip" >> $env:GITHUB_ENV
+
+      - name: Upload Provider Studio artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ProviderStudio-Windows-${{ env.VERSION }}
+          path: dist/ProviderStudio/
+          retention-days: 90
+
+      # ------------------------------------------------------------------ Release (tags only)
+
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
           name: EbookCleaner ${{ env.VERSION }}
-          files: ${{ env.ZIP_PATH }}
+          files: |
+            ${{ env.CLEANER_ZIP }}
+            ${{ env.STUDIO_ZIP }}
           generate_release_notes: true
           body: |
             ## EbookCleaner ${{ env.VERSION }}
 
-            ### Installation
-            1. Download `EbookCleaner-Windows-${{ env.VERSION }}.zip`
-            2. Extract the zip anywhere on your PC
-            3. Run `EbookCleaner.exe` inside the extracted folder
-            4. No Python or other installs required
+            Two downloads available:
 
-            ### First run
-            - Go to **Settings** and enter your Anthropic API key to enable AI features
-            - Use **Import Book** to add EPUB / TXT files, or **Fetch from Web** for online sources
+            | Download | Description |
+            |----------|-------------|
+            | `EbookCleaner-Windows-${{ env.VERSION }}.zip` | Main app — import, clean, rewrite, export ebooks |
+            | `ProviderStudio-Windows-${{ env.VERSION }}.zip` | Provider Studio — create site plugins |
+
+            ### Installing EbookCleaner
+            1. Download and extract `EbookCleaner-Windows-${{ env.VERSION }}.zip`
+            2. Run `EbookCleaner.exe` — no Python required
+            3. Go to **Settings** to enter your AI API key
+            4. Use **Plugins** in the toolbar to install community site parsers
+
+            ### Installing Provider Studio
+            1. Download and extract `ProviderStudio-Windows-${{ env.VERSION }}.zip`
+            2. Run `ProviderStudio.exe`
+            3. Fetch a site, define selectors, and submit to the plugin registry
