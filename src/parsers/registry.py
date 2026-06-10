@@ -36,8 +36,19 @@ _DEDICATED = [
 # Config parsers (one per SiteConfig entry)
 _CONFIG = get_config_parsers()
 
-# Full ordered list (default parser is always the fallback, not in this list)
-_ALL_PARSERS = _DEDICATED + _CONFIG
+# Community plugins installed via Plugin Manager
+def _load_plugin_parsers():
+    try:
+        from src.plugin_manager import PluginManager
+        from src.parsers.config_parser import ConfigParser
+        return [ConfigParser(cfg) for cfg in PluginManager().load_installed()]
+    except Exception:
+        return []
+
+_PLUGINS = _load_plugin_parsers()
+
+# Full ordered list — plugins checked after bundled configs, before default
+_ALL_PARSERS = _DEDICATED + _CONFIG + _PLUGINS
 
 
 def get_parser(url: str, content_selector: str = "", soup=None) -> object:
@@ -92,6 +103,17 @@ def list_parser_names() -> list[tuple]:
         result.append((p.site_name, "Config"))
     result.append((DefaultParser().site_name, "Default"))
     return sorted(result, key=lambda x: x[0].lower())
+
+
+def reload_plugins() -> None:
+    """Re-scan ~/.ebookcleaner/plugins/ and update _ALL_PARSERS in place.
+
+    Called by the Plugin Manager dialog after install/uninstall so the new
+    parsers are available immediately without restarting the app.
+    """
+    global _PLUGINS, _ALL_PARSERS
+    _PLUGINS = _load_plugin_parsers()
+    _ALL_PARSERS = _DEDICATED + _CONFIG + _PLUGINS
 
 
 def list_supported_sites() -> list:

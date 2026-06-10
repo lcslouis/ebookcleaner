@@ -128,6 +128,13 @@ class MainWindow(QMainWindow):
         site_logins_action.triggered.connect(self._open_site_logins)
         tb.addAction(site_logins_action)
 
+        plugins_action = QAction("Plugins", self)
+        plugins_action.setToolTip(
+            "Browse and install community site plugins without updating the app"
+        )
+        plugins_action.triggered.connect(self._open_plugin_manager)
+        tb.addAction(plugins_action)
+
         tb.addSeparator()
 
         self._downloads_action = QAction("Downloads", self)
@@ -249,6 +256,10 @@ class MainWindow(QMainWindow):
     def _open_site_logins(self):
         from src.ui.site_logins_dialog import SiteLoginsDialog
         SiteLoginsDialog(self.db, self).exec()
+
+    def _open_plugin_manager(self):
+        from src.ui.plugin_manager_dialog import PluginManagerDialog
+        PluginManagerDialog(self).exec()
 
     def _check_for_updates(self):
         from src.ui.update_checker import CheckForUpdatesDialog
