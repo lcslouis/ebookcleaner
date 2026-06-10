@@ -32,6 +32,7 @@ class MainWindow(QMainWindow):
         self._build_toolbar()
         self._build_statusbar()
         QTimer.singleShot(400, self._check_sync_on_startup)
+        QTimer.singleShot(2000, self._auto_check_for_updates)
 
     def _build_ui(self):
         central = QWidget()
@@ -79,6 +80,15 @@ class MainWindow(QMainWindow):
         import_action.setToolTip("Import EPUB or TXT file from disk")
         import_action.triggered.connect(self._import_book)
         tb.addAction(import_action)
+
+        self._check_updates_action = QAction("Check for Updates", self)
+        self._check_updates_action.setToolTip(
+            "Check all books for new chapters available online"
+        )
+        self._check_updates_action.triggered.connect(self._check_for_updates)
+        tb.addAction(self._check_updates_action)
+
+        tb.addSeparator()
 
         fetch_action = QAction("Fetch from Web", self)
         fetch_action.setToolTip(
@@ -239,6 +249,35 @@ class MainWindow(QMainWindow):
     def _open_site_logins(self):
         from src.ui.site_logins_dialog import SiteLoginsDialog
         SiteLoginsDialog(self.db, self).exec()
+
+    def _check_for_updates(self):
+        from src.ui.update_checker import CheckForUpdatesDialog
+        CheckForUpdatesDialog(self.db, self.download_manager, self).exec()
+
+    def _auto_check_for_updates(self):
+        """Silent background check on launch; only shows a notification if updates found."""
+        if not self.db.get_setting("auto_check_updates", "1") == "1":
+            return
+        books_with_url = [b for b in self.db.get_all_books() if b.get("source_url")]
+        if not books_with_url:
+            return
+
+        from src.ui.update_checker import UpdateCheckerWorker
+        self._update_worker = UpdateCheckerWorker(self.db)
+        self._update_worker.signals.finished.connect(self._on_auto_check_done)
+        self._update_worker.start()
+
+    def _on_auto_check_done(self, results: list):
+        if not results:
+            return
+        n = len(results)
+        titles = ", ".join(r["book"]["title"] for r in results[:3])
+        if n > 3:
+            titles += f" (+{n - 3} more)"
+        self._status_label.setText(
+            f"{n} book{'s' if n != 1 else ''} have new chapters: {titles} — click \"Check for Updates\""
+        )
+        self._check_updates_action.setText(f"Check for Updates ({n})")
 
     def _open_settings(self):
         dlg = SettingsDialog(self.db, self)
