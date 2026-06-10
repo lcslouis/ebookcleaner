@@ -108,3 +108,33 @@ class PluginManager:
         dest = PLUGINS_DIR / f"{plugin_id}.json"
         with open(dest, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
+
+    # ------------------------------------------------------------------ recommendations
+
+    def get_recommended_plugins(self, db, registry: list) -> list:
+        """Return registry entries matching library books that aren't installed."""
+        from urllib.parse import urlparse
+        installed = self.get_installed_ids()
+        try:
+            books = db.get_all_books()
+        except Exception:
+            return []
+        hostnames = set()
+        for book in books:
+            url = (book.get("source_url") or "").strip()
+            if url:
+                try:
+                    hostnames.add(urlparse(url).netloc.lower())
+                except Exception:
+                    pass
+        if not hostnames:
+            return []
+        recommended = []
+        for entry in registry:
+            if entry.get("id") in installed:
+                continue
+            for domain in entry.get("domains", []):
+                if any(domain in h for h in hostnames):
+                    recommended.append(entry)
+                    break
+        return recommended

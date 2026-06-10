@@ -44,13 +44,36 @@ class _InstallWorker(QThread):
             self.error.emit(str(e))
 
 
+class _BatchInstallWorker(QThread):
+    progress = Signal(str)   # name of each plugin as it finishes
+    finished = Signal(int)   # total installed count
+    error    = Signal(str)
+
+    def __init__(self, pm, metas):
+        super().__init__()
+        self._pm    = pm
+        self._metas = metas
+
+    def run(self):
+        count = 0
+        for meta in self._metas:
+            try:
+                self._pm.install(meta)
+                count += 1
+                self.progress.emit(meta.get("name", meta.get("id", "")))
+            except Exception as e:
+                self.error.emit(f"{meta.get('name', '')}: {e}")
+        self.finished.emit(count)
+
+
 class PluginManagerDialog(QDialog):
     plugins_changed = Signal()   # emitted when install/uninstall happens
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, db=None):
         super().__init__(parent)
         from src.plugin_manager import PluginManager
         self._pm = PluginManager()
+        self._db = db
         self._registry = []
         self.setWindowTitle("Plugin Manager")
         self.setMinimumSize(780, 540)
@@ -120,6 +143,16 @@ class PluginManagerDialog(QDialog):
         self._refresh_btn = QPushButton("Refresh Registry")
         self._refresh_btn.clicked.connect(self._refresh_registry)
         avail_btn_row.addWidget(self._refresh_btn)
+
+        self._recommend_btn = QPushButton("Get Plugins for My Library")
+        self._recommend_btn.setObjectName("secondary")
+        self._recommend_btn.setEnabled(self._db is not None)
+        self._recommend_btn.setToolTip(
+            "Find plugins for sites you have books from and install them in one click."
+        )
+        self._recommend_btn.clicked.connect(self._get_recommended)
+        avail_btn_row.addWidget(self._recommend_btn)
+
         avail_btn_row.addStretch()
         self._install_btn = QPushButton("Install Selected")
         self._install_btn.setEnabled(False)
@@ -298,3 +331,56 @@ class PluginManagerDialog(QDialog):
             self._reload_parsers()
             self._status_lbl.setText(f"Removed: {name}")
             self.plugins_changed.emit()
+
+    # ------------------------------------------------------------------ recommendations
+
+    def _get_recommended(self):
+        if not self._registry:
+            QMessageBox.information(
+                self, "Registry Not Loaded",
+                "Please refresh the registry first, then try again."
+            )
+            return
+        matches = self._pm.get_recommended_plugins(self._db, self._registry)
+        if not matches:
+            QMessageBox.information(
+                self, "All Set",
+                "No new plugins found for sites in your library.\n"
+                "All supported sites are already covered."
+            )
+            return
+        names = "\n".join(
+            f"• {m.get('name', m.get('id', ''))}  "
+            f"({', '.join(m.get('domains', [])[:2])})"
+            for m in matches
+        )
+        reply = QMessageBox.question(
+            self, "Recommended Plugins",
+            f"Found {len(matches)} plugin(s) for sites in your library:\n\n{names}\n\nInstall all?",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes,
+        )
+        if reply == QMessageBox.Yes:
+            self._batch_install(matches)
+
+    def _batch_install(self, metas: list):
+        self._recommend_btn.setEnabled(False)
+        self._refresh_btn.setEnabled(False)
+        self._status_lbl.setText(f"Installing {len(metas)} plugin(s)…")
+        self._batch_worker = _BatchInstallWorker(self._pm, metas)
+        self._batch_worker.progress.connect(
+            lambda name: self._status_lbl.setText(f"Installed: {name}…")
+        )
+        self._batch_worker.finished.connect(self._on_batch_finished)
+        self._batch_worker.error.connect(
+            lambda msg: self._status_lbl.setText(f"Warning: {msg}")
+        )
+        self._batch_worker.start()
+
+    def _on_batch_finished(self, count: int):
+        self._recommend_btn.setEnabled(self._db is not None)
+        self._refresh_btn.setEnabled(True)
+        self._status_lbl.setText(f"Installed {count} plugin(s)")
+        self._load_installed()
+        self._on_registry_loaded(self._registry)
+        self._reload_parsers()
+        self.plugins_changed.emit()
