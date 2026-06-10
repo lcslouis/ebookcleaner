@@ -62,11 +62,16 @@ jobs:
       - name: Build EbookCleaner (Full)
         run: pyinstaller ebookcleaner.spec --clean --noconfirm
 
+      - name: Rename Full output folder
+        shell: pwsh
+        run: |
+          Rename-Item "dist\EbookCleaner" -NewName "EbookCleaner-Full"
+
       - name: Verify EbookCleaner (Full)
         shell: pwsh
         run: |
-          if (Test-Path "dist\EbookCleaner\EbookCleaner.exe") {
-            $size = (Get-Item "dist\EbookCleaner\EbookCleaner.exe").Length / 1MB
+          if (Test-Path "dist\EbookCleaner-Full\EbookCleaner.exe") {
+            $size = (Get-Item "dist\EbookCleaner-Full\EbookCleaner.exe").Length / 1MB
             Write-Host "EbookCleaner (Full) — $([math]::Round($size,1)) MB"
           } else { Write-Error "EbookCleaner.exe not found"; exit 1 }
 
@@ -74,14 +79,14 @@ jobs:
         shell: pwsh
         run: |
           $zip = "dist\EbookCleaner-Windows-$env:VERSION.zip"
-          Compress-Archive -Path dist\EbookCleaner -DestinationPath $zip
+          Compress-Archive -Path dist\EbookCleaner-Full -DestinationPath $zip
           echo "CLEANER_ZIP=$zip" >> $env:GITHUB_ENV
 
       - name: Upload EbookCleaner (Full) artifact
         uses: actions/upload-artifact@v4
         with:
           name: EbookCleaner-Windows-${{ env.VERSION }}
-          path: dist/EbookCleaner/
+          path: dist/EbookCleaner-Full/
           retention-days: 90
 
       # ------------------------------------------------------------------ 2. EbookCleaner Lite
@@ -150,7 +155,7 @@ jobs:
         run: |
           $bundle = "dist\EbookCleaner-Full-Bundle-Windows-$env:VERSION"
           New-Item -ItemType Directory -Path $bundle | Out-Null
-          Copy-Item -Recurse "dist\EbookCleaner" "$bundle\EbookCleaner"
+          Copy-Item -Recurse "dist\EbookCleaner-Full" "$bundle\EbookCleaner"
           Copy-Item -Recurse "dist\ProviderStudio" "$bundle\ProviderStudio"
           $zip = "$bundle.zip"
           Compress-Archive -Path $bundle -DestinationPath $zip
