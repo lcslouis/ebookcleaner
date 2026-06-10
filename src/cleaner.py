@@ -5,6 +5,9 @@ from collections import Counter
 class TextCleaner:
     """Rule-based text cleaner for ebook content."""
 
+    def __init__(self, custom_rules: list = None):
+        self._custom_rules = custom_rules or []
+
     def clean(self, text: str) -> str:
         text = self._fix_encoding(text)
         text = self._fix_broken_hyphenation(text)
@@ -13,7 +16,25 @@ class TextCleaner:
         text = self._remove_garbage_lines(text)
         text = self._fix_ocr_artifacts(text)
         text = self._normalize_whitespace(text)
+        text = self._apply_custom_rules(text)
         return text.strip()
+
+    def _apply_custom_rules(self, text: str) -> str:
+        for rule in self._custom_rules:
+            if not rule.get("enabled", True):
+                continue
+            pattern = rule.get("pattern", "")
+            if not pattern:
+                continue
+            replacement = rule.get("replacement", "")
+            try:
+                if rule.get("is_regex"):
+                    text = re.sub(pattern, replacement, text, flags=re.MULTILINE)
+                else:
+                    text = text.replace(pattern, replacement)
+            except re.error:
+                pass
+        return text
 
     def _fix_encoding(self, text: str) -> str:
         replacements = {

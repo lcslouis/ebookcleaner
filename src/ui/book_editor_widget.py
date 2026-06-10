@@ -126,15 +126,61 @@ class BookEditorWidget(QWidget):
         editor_layout.setContentsMargins(0, 0, 0, 0)
         editor_layout.setSpacing(6)
 
+        # Toolbar row: rule editor + batch operations
+        toolbar_row = QHBoxLayout()
+        toolbar_row.setSpacing(6)
+
+        self.edit_rules_btn = QPushButton("Edit Rules…")
+        self.edit_rules_btn.setObjectName("secondary")
+        self.edit_rules_btn.setEnabled(False)
+        self.edit_rules_btn.clicked.connect(self._open_rule_editor)
+        toolbar_row.addWidget(self.edit_rules_btn)
+
+        vline = QFrame(); vline.setFrameShape(QFrame.VLine)
+        toolbar_row.addWidget(vline)
+
+        self.batch_rules_btn = QPushButton("Batch Rules")
+        self.batch_rules_btn.setObjectName("secondary")
+        self.batch_rules_btn.setEnabled(False)
+        self.batch_rules_btn.clicked.connect(self._open_batch_rules)
+        toolbar_row.addWidget(self.batch_rules_btn)
+
+        self.batch_grammar_btn = QPushButton("Batch Grammar")
+        self.batch_grammar_btn.setObjectName("secondary")
+        self.batch_grammar_btn.setEnabled(False)
+        self.batch_grammar_btn.clicked.connect(self._open_batch_grammar)
+        toolbar_row.addWidget(self.batch_grammar_btn)
+
+        self.batch_rewrite_btn = QPushButton("Batch Rewrite")
+        self.batch_rewrite_btn.setObjectName("secondary")
+        self.batch_rewrite_btn.setEnabled(False)
+        self.batch_rewrite_btn.clicked.connect(self._open_batch_rewrite)
+        toolbar_row.addWidget(self.batch_rewrite_btn)
+
+        toolbar_row.addStretch()
+        editor_layout.addLayout(toolbar_row)
+
         self.tabs = QTabWidget()
 
         # Original tab
         orig_widget = QWidget()
         orig_layout = QVBoxLayout(orig_widget)
-        orig_layout.setContentsMargins(0, 0, 0, 0)
+        orig_layout.setContentsMargins(4, 4, 4, 4)
+        orig_layout.setSpacing(6)
+
+        orig_btn_row = QHBoxLayout()
+        self.create_rule_btn = QPushButton("Create Rule from Selection")
+        self.create_rule_btn.setObjectName("secondary")
+        self.create_rule_btn.setEnabled(False)
+        self.create_rule_btn.clicked.connect(self._create_rule_from_selection)
+        orig_btn_row.addWidget(self.create_rule_btn)
+        orig_btn_row.addStretch()
+        orig_layout.addLayout(orig_btn_row)
+
         self.original_edit = QTextEdit()
         self.original_edit.setReadOnly(True)
         self.original_edit.setPlaceholderText("Original imported content")
+        self.original_edit.selectionChanged.connect(self._on_original_selection_changed)
         orig_layout.addWidget(self.original_edit)
         self.tabs.addTab(orig_widget, "Original")
 
@@ -216,6 +262,11 @@ class BookEditorWidget(QWidget):
         self.save_btn.setEnabled(False)
         self.cover_thumb.setPixmap(QPixmap())
         self.cover_thumb.setText("No\nCover")
+        self.edit_rules_btn.setEnabled(False)
+        self.batch_rules_btn.setEnabled(False)
+        self.batch_grammar_btn.setEnabled(False)
+        self.batch_rewrite_btn.setEnabled(False)
+        self.create_rule_btn.setEnabled(False)
         self._current_book_id = None
         self._current_chapter_id = None
 
@@ -234,6 +285,11 @@ class BookEditorWidget(QWidget):
         self.author_edit.setEnabled(True)
         self.title_edit.setText(book["title"])
         self.author_edit.setText(book["author"])
+
+        self.edit_rules_btn.setEnabled(True)
+        self.batch_rules_btn.setEnabled(True)
+        self.batch_grammar_btn.setEnabled(True)
+        self.batch_rewrite_btn.setEnabled(True)
 
         self._refresh_cover_thumb(book_id)
         self._load_chapter_list()
@@ -525,9 +581,67 @@ class BookEditorWidget(QWidget):
             QMessageBox.warning(self, "No Content", "No original content to clean.")
             return
         from src.cleaner import TextCleaner
-        result = TextCleaner().clean(source)
+        custom_rules = self.db.get_custom_rules(self._current_book_id) if self._current_book_id else []
+        result = TextCleaner(custom_rules=custom_rules).clean(source)
         self.cleaned_edit.setPlainText(result)
         self.tabs.setCurrentIndex(1)
+
+    # ------------------------------------------------------------------ rule editor / batch
+
+    def _on_original_selection_changed(self):
+        has_sel = bool(self.original_edit.textCursor().selectedText())
+        self.create_rule_btn.setEnabled(has_sel and bool(self._current_book_id))
+
+    def _open_rule_editor(self):
+        if not self._current_book_id:
+            return
+        ch = self.db.get_chapter(self._current_chapter_id) if self._current_chapter_id else None
+        chapter_text = ch.get("original_content", "") if ch else ""
+        from src.ui.rule_editor_dialog import RuleEditorDialog
+        RuleEditorDialog(self.db, self._current_book_id, chapter_text, parent=self).exec()
+
+    def _create_rule_from_selection(self):
+        if not self._current_book_id:
+            return
+        selected = self.original_edit.textCursor().selectedText()
+        if not selected:
+            return
+        from src.ui.rule_editor_dialog import RuleEditorDialog
+        dlg = RuleEditorDialog(self.db, self._current_book_id, parent=self)
+        dlg.add_rule_from_selection(selected)
+
+    def _open_batch_rules(self):
+        if not self._current_book_id:
+            return
+        from src.ui.batch_dialog import BatchDialog
+        dlg = BatchDialog(self.db, self._current_book_id, "rules", parent=self)
+        dlg.exec()
+        if self._current_chapter_id:
+            self._load_chapter(self._current_chapter_id)
+
+    def _open_batch_grammar(self):
+        if not self._current_book_id:
+            return
+        proc = self._get_ai_processor()
+        if not proc:
+            return
+        from src.ui.batch_dialog import BatchDialog
+        dlg = BatchDialog(self.db, self._current_book_id, "grammar", ai_processor=proc, parent=self)
+        dlg.exec()
+        if self._current_chapter_id:
+            self._load_chapter(self._current_chapter_id)
+
+    def _open_batch_rewrite(self):
+        if not self._current_book_id:
+            return
+        proc = self._get_ai_processor()
+        if not proc:
+            return
+        from src.ui.batch_dialog import BatchDialog
+        dlg = BatchDialog(self.db, self._current_book_id, "rewrite", ai_processor=proc, parent=self)
+        dlg.exec()
+        if self._current_chapter_id:
+            self._load_chapter(self._current_chapter_id)
 
     def _ai_clean(self):
         proc = self._get_ai_processor()

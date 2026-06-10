@@ -60,6 +60,18 @@ class Database:
                 key TEXT PRIMARY KEY,
                 value TEXT
             );
+
+            CREATE TABLE IF NOT EXISTS book_custom_rules (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                book_id INTEGER NOT NULL,
+                rule_name TEXT DEFAULT '',
+                pattern TEXT NOT NULL DEFAULT '',
+                replacement TEXT DEFAULT '',
+                is_regex INTEGER DEFAULT 0,
+                enabled INTEGER DEFAULT 1,
+                sort_order INTEGER DEFAULT 0,
+                FOREIGN KEY (book_id) REFERENCES books(id) ON DELETE CASCADE
+            );
         """)
         c.commit()
         # Migrate existing databases to add new columns (idempotent)
@@ -74,6 +86,20 @@ class Database:
         ch_existing = {row[1] for row in self.conn.execute("PRAGMA table_info(chapters)").fetchall()}
         if "source_url" not in ch_existing:
             self.conn.execute("ALTER TABLE chapters ADD COLUMN source_url TEXT DEFAULT ''")
+        # Ensure book_custom_rules table exists (for databases created before this feature)
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS book_custom_rules (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                book_id INTEGER NOT NULL,
+                rule_name TEXT DEFAULT '',
+                pattern TEXT NOT NULL DEFAULT '',
+                replacement TEXT DEFAULT '',
+                is_regex INTEGER DEFAULT 0,
+                enabled INTEGER DEFAULT 1,
+                sort_order INTEGER DEFAULT 0,
+                FOREIGN KEY (book_id) REFERENCES books(id) ON DELETE CASCADE
+            )
+        """)
         self.conn.commit()
 
     # --- Books ---
@@ -218,6 +244,41 @@ class Database:
         )
         row = cur.fetchone()
         return (row[0] or 0) + 1
+
+    # --- Custom Rules ---
+
+    def get_custom_rules(self, book_id: int) -> list:
+        cur = self.conn.execute(
+            "SELECT * FROM book_custom_rules WHERE book_id = ? ORDER BY sort_order, id",
+            (book_id,)
+        )
+        return [dict(row) for row in cur.fetchall()]
+
+    def add_custom_rule(self, book_id: int, rule_name: str, pattern: str,
+                        replacement: str = "", is_regex: bool = False) -> int:
+        cur = self.conn.execute(
+            """INSERT INTO book_custom_rules (book_id, rule_name, pattern, replacement, is_regex)
+               VALUES (?, ?, ?, ?, ?)""",
+            (book_id, rule_name, pattern, replacement, int(is_regex))
+        )
+        self.conn.commit()
+        return cur.lastrowid
+
+    def update_custom_rule(self, rule_id: int, **kwargs) -> None:
+        allowed = {"rule_name", "pattern", "replacement", "is_regex", "enabled", "sort_order"}
+        fields = {k: v for k, v in kwargs.items() if k in allowed}
+        if not fields:
+            return
+        set_clause = ", ".join(f"{k} = ?" for k in fields)
+        self.conn.execute(
+            f"UPDATE book_custom_rules SET {set_clause} WHERE id = ?",
+            list(fields.values()) + [rule_id]
+        )
+        self.conn.commit()
+
+    def delete_custom_rule(self, rule_id: int) -> None:
+        self.conn.execute("DELETE FROM book_custom_rules WHERE id = ?", (rule_id,))
+        self.conn.commit()
 
     # --- Settings ---
 
