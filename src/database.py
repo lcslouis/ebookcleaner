@@ -72,6 +72,12 @@ class Database:
                 sort_order INTEGER DEFAULT 0,
                 FOREIGN KEY (book_id) REFERENCES books(id) ON DELETE CASCADE
             );
+
+            CREATE TABLE IF NOT EXISTS site_cookies (
+                domain TEXT PRIMARY KEY,
+                cookies_json TEXT DEFAULT '[]',
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
         """)
         c.commit()
         # Migrate existing databases to add new columns (idempotent)
@@ -98,6 +104,13 @@ class Database:
                 enabled INTEGER DEFAULT 1,
                 sort_order INTEGER DEFAULT 0,
                 FOREIGN KEY (book_id) REFERENCES books(id) ON DELETE CASCADE
+            )
+        """)
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS site_cookies (
+                domain TEXT PRIMARY KEY,
+                cookies_json TEXT DEFAULT '[]',
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
         self.conn.commit()
@@ -279,6 +292,48 @@ class Database:
     def delete_custom_rule(self, rule_id: int) -> None:
         self.conn.execute("DELETE FROM book_custom_rules WHERE id = ?", (rule_id,))
         self.conn.commit()
+
+    # --- Site Cookies ---
+
+    def get_all_site_cookies(self) -> list:
+        cur = self.conn.execute(
+            "SELECT domain, cookies_json, updated_at FROM site_cookies ORDER BY domain"
+        )
+        return [dict(row) for row in cur.fetchall()]
+
+    def get_site_cookies(self, domain: str) -> list:
+        cur = self.conn.execute(
+            "SELECT cookies_json FROM site_cookies WHERE domain = ?", (domain,)
+        )
+        row = cur.fetchone()
+        if not row:
+            return []
+        import json
+        return json.loads(row[0]) or []
+
+    def set_site_cookies(self, domain: str, cookies: list) -> None:
+        import json
+        self.conn.execute(
+            "INSERT OR REPLACE INTO site_cookies (domain, cookies_json, updated_at)"
+            " VALUES (?, ?, CURRENT_TIMESTAMP)",
+            (domain, json.dumps(cookies))
+        )
+        self.conn.commit()
+
+    def delete_site_cookies(self, domain: str) -> None:
+        self.conn.execute("DELETE FROM site_cookies WHERE domain = ?", (domain,))
+        self.conn.commit()
+
+    def get_all_cookies_flat(self) -> list:
+        """Return all stored site cookies as a flat list for requests.Session."""
+        import json
+        all_cookies = []
+        for row in self.get_all_site_cookies():
+            try:
+                all_cookies.extend(json.loads(row["cookies_json"]) or [])
+            except Exception:
+                pass
+        return all_cookies
 
     # --- Settings ---
 

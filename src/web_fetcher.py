@@ -19,12 +19,21 @@ HEADERS = {
 
 
 class WebFetcher:
-    def __init__(self, delay: float = 1.5, content_selector: str = ""):
+    def __init__(self, delay: float = 1.5, content_selector: str = "",
+                 cookies: list = None):
         self.delay = delay
         self.content_selector = content_selector
         self.session = requests.Session()
         self.session.headers.update(HEADERS)
         self._last_request_time = 0.0
+        if cookies:
+            for c in cookies:
+                self.session.cookies.set(
+                    c.get("name", ""),
+                    c.get("value", ""),
+                    domain=c.get("domain", ""),
+                    path=c.get("path", "/"),
+                )
 
     # ------------------------------------------------------------------ public
 

@@ -201,6 +201,13 @@ class FetchDialog(QDialog):
         self.delay_spin.setValue(1.5)
         self.delay_spin.setFixedWidth(70)
         bottom_row.addWidget(self.delay_spin)
+
+        site_logins_btn = QPushButton("Site Logins…")
+        site_logins_btn.setObjectName("secondary")
+        site_logins_btn.setToolTip("Manage saved login sessions for sites that require authentication")
+        site_logins_btn.clicked.connect(self._open_site_logins)
+        bottom_row.addWidget(site_logins_btn)
+
         bottom_row.addStretch()
         self.cancel_btn = QPushButton("Cancel")
         self.cancel_btn.setObjectName("secondary")
@@ -258,6 +265,16 @@ class FetchDialog(QDialog):
         # Insert just below heading (index 1)
         layout = self.layout()
         layout.insertWidget(1, existing_lbl)
+
+    # ------------------------------------------------------------------ helpers
+
+    def _get_cookies(self) -> list:
+        """Return all stored site cookies for injection into WebFetcher."""
+        return self.db.get_all_cookies_flat()
+
+    def _open_site_logins(self):
+        from src.ui.site_logins_dialog import SiteLoginsDialog
+        SiteLoginsDialog(self.db, self).exec()
 
     # ------------------------------------------------------------------ slots
 
@@ -317,7 +334,8 @@ class FetchDialog(QDialog):
 
         selector = self.selector_edit.text().strip() if self._adv_group.isChecked() else ""
         from src.web_fetcher import WebFetcher
-        fetcher = WebFetcher(delay=self.delay_spin.value(), content_selector=selector)
+        fetcher = WebFetcher(delay=self.delay_spin.value(), content_selector=selector,
+                             cookies=self._get_cookies())
 
         self._toc_worker = _TocWorker(fetcher, url)
         self._toc_worker.signals.finished.connect(self._on_toc_loaded)
@@ -429,7 +447,8 @@ class FetchDialog(QDialog):
         url = self.url_edit.text().strip()
         selector = self.selector_edit.text().strip() if self._adv_group.isChecked() else ""
         from src.web_fetcher import WebFetcher
-        fetcher = WebFetcher(delay=self.delay_spin.value(), content_selector=selector)
+        fetcher = WebFetcher(delay=self.delay_spin.value(), content_selector=selector,
+                             cookies=self._get_cookies())
 
         self._fetch_worker = _FetchWorker(fetcher, selected)
         self._fetch_worker.signals.chapter_done.connect(self._on_chapter_done)
@@ -482,7 +501,6 @@ class FetchDialog(QDialog):
     def _update_existing_book(self, chapter_results):
         book_id = self._update_book_id
         existing_urls = self.db.get_chapter_source_urls(book_id)
-        existing_count = self.db.get_max_chapter_number(book_id)
 
         if existing_urls:
             # URL-based dedup: precise for books with stored source URLs
@@ -491,8 +509,9 @@ class FetchDialog(QDialog):
                 if not (ch.get("url", "") and ch.get("url", "") in existing_urls)
             ]
         else:
-            # Position-based fallback: anything beyond the current chapter count is new
-            new_chapters = chapter_results[existing_count:]
+            # No stored URLs — the dialog already pre-filtered to only new chapters,
+            # so everything in chapter_results is new
+            new_chapters = chapter_results
 
         if not new_chapters:
             self._set_loading(False)
@@ -538,7 +557,8 @@ class FetchDialog(QDialog):
         from src.web_fetcher import WebFetcher
         from src.ui.download_manager import DownloadTask
         selector = self.selector_edit.text().strip() if self._adv_group.isChecked() else ""
-        fetcher = WebFetcher(delay=self.delay_spin.value(), content_selector=selector)
+        fetcher = WebFetcher(delay=self.delay_spin.value(), content_selector=selector,
+                             cookies=self._get_cookies())
 
         task = DownloadTask(
             db=self.db,

@@ -110,7 +110,7 @@ class ReFetchDialog(QDialog):
             {"url": c["source_url"], "title": c["title"] or f"Chapter {c['chapter_number']}"}
             for c in self._fetchable
         ]
-        fetcher = WebFetcher()
+        fetcher = WebFetcher(cookies=self.db.get_all_cookies_flat())
         self._worker = _FetchWorker(fetcher, chapter_list)
         self._worker.signals.chapter_done.connect(self._on_chapter_done)
         self._worker.signals.status_update.connect(self._on_status_update)

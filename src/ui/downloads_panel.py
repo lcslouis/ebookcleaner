@@ -2,6 +2,8 @@
 Downloads panel — docked at the bottom of the main window.
 Shows all active and recently completed DownloadTasks.
 """
+import webbrowser
+
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QScrollArea, QProgressBar, QFrame
@@ -13,18 +15,23 @@ from src.ui.download_manager import DownloadTask
 class _DownloadRowWidget(QFrame):
     def __init__(self, task: DownloadTask, manager, parent=None):
         super().__init__(parent)
-        self.task = task
-        self._manager = manager
+        self.task         = task
+        self._manager     = manager
+        self._blocked_url = ""
         self.setFrameShape(QFrame.StyledPanel)
         self._build_ui()
         task.progress_changed.connect(self._on_progress)
         task.completed.connect(lambda _: self._on_done())
         task.failed.connect(lambda _, msg: self._on_error(msg))
+        task.blocked_403.connect(lambda _tid, url, title: self._on_blocked_403(url, title))
 
     def _build_ui(self):
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(8, 6, 8, 6)
-        layout.setSpacing(10)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(8, 6, 8, 6)
+        root.setSpacing(4)
+
+        # ---- main row: title / bar / status / cancel ----
+        main_row = QHBoxLayout(); main_row.setSpacing(10)
 
         info = QVBoxLayout(); info.setSpacing(2)
 
@@ -46,7 +53,7 @@ class _DownloadRowWidget(QFrame):
         self.status_lbl.setObjectName("subtext")
         info.addWidget(self.status_lbl)
 
-        layout.addLayout(info, 1)
+        main_row.addLayout(info, 1)
 
         self.cancel_btn = QPushButton("✕")
         self.cancel_btn.setFixedSize(22, 22)
@@ -55,7 +62,38 @@ class _DownloadRowWidget(QFrame):
         self.cancel_btn.clicked.connect(
             lambda: self._manager.cancel_task(self.task.task_id)
         )
-        layout.addWidget(self.cancel_btn, alignment=Qt.AlignVCenter)
+        main_row.addWidget(self.cancel_btn, alignment=Qt.AlignVCenter)
+        root.addLayout(main_row)
+
+        # ---- blocked row (hidden until 403 fires) ----
+        self._blocked_widget = QWidget()
+        blocked_row = QHBoxLayout(self._blocked_widget)
+        blocked_row.setContentsMargins(0, 2, 0, 2)
+        blocked_row.setSpacing(6)
+
+        blocked_lbl = QLabel("Chapter blocked (403) — solve CAPTCHA then retry:")
+        blocked_lbl.setObjectName("subtext")
+        blocked_row.addWidget(blocked_lbl)
+
+        open_btn = QPushButton("Open in Browser")
+        open_btn.setObjectName("secondary")
+        open_btn.clicked.connect(self._open_in_browser)
+        blocked_row.addWidget(open_btn)
+
+        retry_btn = QPushButton("Retry")
+        retry_btn.clicked.connect(lambda: self._resume(skip=False))
+        blocked_row.addWidget(retry_btn)
+
+        skip_btn = QPushButton("Skip Chapter")
+        skip_btn.setObjectName("secondary")
+        skip_btn.clicked.connect(lambda: self._resume(skip=True))
+        blocked_row.addWidget(skip_btn)
+
+        blocked_row.addStretch()
+        self._blocked_widget.setVisible(False)
+        root.addWidget(self._blocked_widget)
+
+    # ------------------------------------------------------------------ slots
 
     def _on_progress(self, done, total, chapter_title):
         self.bar.setMaximum(max(total, 1))
@@ -64,6 +102,7 @@ class _DownloadRowWidget(QFrame):
         self.status_lbl.setText(f"{done} / {total}  —  {short}")
 
     def _on_done(self):
+        self._blocked_widget.setVisible(False)
         self.bar.setValue(self.bar.maximum())
         fc = self.task.failed_count
         if fc:
@@ -79,6 +118,22 @@ class _DownloadRowWidget(QFrame):
         self.status_lbl.setText(f"Error: {short}")
         self.status_lbl.setStyleSheet("color: #ef5350;")
         self.cancel_btn.setEnabled(False)
+
+    def _on_blocked_403(self, url: str, title: str):
+        self._blocked_url = url
+        short = title[:40] + "…" if len(title) > 40 else title
+        self.status_lbl.setText(f"Blocked (403): {short}")
+        self.status_lbl.setStyleSheet("color: #ef5350;")
+        self._blocked_widget.setVisible(True)
+
+    def _open_in_browser(self):
+        if self._blocked_url:
+            webbrowser.open(self._blocked_url)
+
+    def _resume(self, skip: bool):
+        self._blocked_widget.setVisible(False)
+        self.status_lbl.setStyleSheet("")
+        self.task.resume_after_403(skip=skip)
 
 
 class DownloadsPanel(QWidget):

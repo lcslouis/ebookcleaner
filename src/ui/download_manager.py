@@ -8,6 +8,7 @@ _FetchWorker is defined here (moved out of fetch_dialog) so both
 the foreground dialog and background tasks share the same worker.
 """
 import time
+import threading
 import uuid
 import sys
 from pathlib import Path
@@ -39,6 +40,7 @@ class _FetchSignals(QObject):
     status_update = Signal(str)            # retry / backoff messages
     finished = Signal(list)               # [{title, content, url, error}]
     error = Signal(str)
+    blocked_403 = Signal(str, str)         # url, chapter_title
 
 
 class _FetchWorker(QThread):
@@ -47,10 +49,19 @@ class _FetchWorker(QThread):
         self.fetcher = fetcher
         self.chapter_list = chapter_list
         self.signals = _FetchSignals()
-        self._cancelled = False
+        self._cancelled   = False
+        self._pause_event = threading.Event()
+        self._pause_event.set()   # not paused initially
+        self._skip_blocked = False
 
     def cancel(self):
         self._cancelled = True
+        self._pause_event.set()   # unblock any waiting thread
+
+    def resume(self, skip: bool = False):
+        """Resume after a 403 pause. Pass skip=True to drop the chapter."""
+        self._skip_blocked = skip
+        self._pause_event.set()
 
     def run(self):
         results = []
@@ -79,7 +90,21 @@ class _FetchWorker(QThread):
             except _requests.exceptions.HTTPError as e:
                 code = e.response.status_code if e.response is not None else 0
                 if code == 403:
-                    return "", "403 Forbidden — site blocked access to this chapter"
+                    # Pause and let the user open a browser / solve CAPTCHA
+                    self.signals.blocked_403.emit(url, title)
+                    self._pause_event.clear()
+                    self._pause_event.wait()   # blocks until resume() or cancel()
+                    if self._cancelled:
+                        return "", "Cancelled"
+                    if self._skip_blocked:
+                        self._skip_blocked = False
+                        return "", "403 Forbidden — skipped by user"
+                    self._pause_event.set()    # re-arm for the next potential block
+                    # Retry once after the user has handled it
+                    try:
+                        return self.fetcher.fetch_chapter(url), None
+                    except Exception as retry_e:
+                        return "", str(retry_e)
                 if code == 404:
                     return "", "404 Not Found"
                 if code == 429:
@@ -132,11 +157,13 @@ class DownloadTask(QObject):
     progress_changed = Signal(int, int, str)   # done, total, current_title
     completed = Signal(str)                    # task_id
     failed = Signal(str, str)                  # task_id, error_msg
+    blocked_403 = Signal(str, str, str)        # task_id, url, chapter_title
 
     STATUS_RUNNING   = "running"
     STATUS_DONE      = "done"
     STATUS_ERROR     = "error"
     STATUS_CANCELLED = "cancelled"
+    STATUS_BLOCKED   = "blocked"
 
     def __init__(self, *, db, fetcher, selected_chapters, toc_info,
                  update_book_id=None, cover_data=b"", cover_mime="image/jpeg",
@@ -168,6 +195,7 @@ class DownloadTask(QObject):
         self._worker.signals.status_update.connect(self._on_status_update)
         self._worker.signals.finished.connect(self._on_finished)
         self._worker.signals.error.connect(self._on_error)
+        self._worker.signals.blocked_403.connect(self._on_blocked_403)
 
     def start(self):
         self._worker.start()
@@ -197,6 +225,14 @@ class DownloadTask(QObject):
             self.status = self.STATUS_ERROR
             self.error_msg = str(e)
             self.failed.emit(self.task_id, str(e))
+
+    def _on_blocked_403(self, url: str, title: str):
+        self.status = self.STATUS_BLOCKED
+        self.blocked_403.emit(self.task_id, url, title)
+
+    def resume_after_403(self, skip: bool = False):
+        self.status = self.STATUS_RUNNING
+        self._worker.resume(skip=skip)
 
     def _on_error(self, msg):
         self.status = self.STATUS_ERROR
@@ -236,15 +272,15 @@ class DownloadTask(QObject):
         self.result_book_id = book_id
 
     def _save_update(self, chapter_results):
-        book_id       = self.update_book_id
-        existing_urls  = self.db.get_chapter_source_urls(book_id)
-        existing_count = self.db.get_max_chapter_number(book_id)
+        book_id      = self.update_book_id
+        existing_urls = self.db.get_chapter_source_urls(book_id)
 
         if existing_urls:
             new_chapters = [ch for ch in chapter_results
                             if not (ch.get("url") and ch["url"] in existing_urls)]
         else:
-            new_chapters = chapter_results[existing_count:]
+            # No stored URLs — dialog pre-filtered to new chapters only
+            new_chapters = chapter_results
 
         if new_chapters:
             start_num = self.db.get_max_chapter_number(book_id) + 1
@@ -272,6 +308,7 @@ class DownloadManager(QObject):
     tasks_changed        = Signal()
     active_count_changed = Signal(int)
     book_saved           = Signal(int)      # book_id — refresh the library list
+    task_blocked_403     = Signal(object, str, str)   # task, url, title
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -284,6 +321,7 @@ class DownloadManager(QObject):
         task.progress_changed.connect(lambda *_: self.tasks_changed.emit())
         task.completed.connect(self._on_task_done)
         task.failed.connect(lambda _tid, _msg: self._on_task_failed())
+        task.blocked_403.connect(self._on_task_blocked_403)
         self._tasks.insert(0, task)
         task.start()
         if was_idle:
@@ -306,7 +344,8 @@ class DownloadManager(QObject):
         return list(self._tasks)
 
     def active_count(self) -> int:
-        return sum(1 for t in self._tasks if t.status == DownloadTask.STATUS_RUNNING)
+        return sum(1 for t in self._tasks
+                   if t.status in (DownloadTask.STATUS_RUNNING, DownloadTask.STATUS_BLOCKED))
 
     def clear_finished(self):
         self._tasks = [t for t in self._tasks
@@ -322,6 +361,14 @@ class DownloadManager(QObject):
                 break
         if self.active_count() == 0:
             _keep_awake(False)
+        self.tasks_changed.emit()
+        self.active_count_changed.emit(self.active_count())
+
+    def _on_task_blocked_403(self, task_id: str, url: str, title: str):
+        for t in self._tasks:
+            if t.task_id == task_id:
+                self.task_blocked_403.emit(t, url, title)
+                break
         self.tasks_changed.emit()
         self.active_count_changed.emit(self.active_count())
 

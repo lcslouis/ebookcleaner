@@ -111,6 +111,13 @@ class MainWindow(QMainWindow):
         sync_action.triggered.connect(self._open_sync)
         tb.addAction(sync_action)
 
+        site_logins_action = QAction("Site Logins", self)
+        site_logins_action.setToolTip(
+            "Manage saved login sessions for sites that require authentication"
+        )
+        site_logins_action.triggered.connect(self._open_site_logins)
+        tb.addAction(site_logins_action)
+
         tb.addSeparator()
 
         self._downloads_action = QAction("Downloads", self)
@@ -228,6 +235,10 @@ class MainWindow(QMainWindow):
     def _open_sync(self):
         from src.ui.sync_dialog import SyncDialog
         SyncDialog(self.db, self).exec()
+
+    def _open_site_logins(self):
+        from src.ui.site_logins_dialog import SiteLoginsDialog
+        SiteLoginsDialog(self.db, self).exec()
 
     def _open_settings(self):
         dlg = SettingsDialog(self.db, self)
