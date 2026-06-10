@@ -139,8 +139,9 @@ class AIProcessor:
 
         return "".join(results)
 
-    def _call_api(self, text: str, system: str, retries: int = 3) -> str:
+    def _call_api(self, text: str, system: str, retries: int = 6) -> str:
         client = self._get_client()
+        last_exc = None
         for attempt in range(retries):
             try:
                 if self.provider == PROVIDER_ANTHROPIC:
@@ -177,9 +178,29 @@ class AIProcessor:
                     return response.choices[0].message.content
 
             except Exception as e:
+                last_exc = e
                 if attempt < retries - 1:
-                    time.sleep(2 ** attempt)
+                    # 503/429/overload: wait longer — 5s, 10s, 20s, 40s, 80s
+                    wait = 5 * (2 ** attempt)
+                    err_str = str(e).lower()
+                    if not any(x in err_str for x in ("503", "429", "overload",
+                                                       "rate", "quota", "unavailable")):
+                        # Non-transient error — don't bother retrying
+                        break
+                    time.sleep(wait)
                 else:
-                    raise
+                    break
 
-        return text
+        err_str = str(last_exc).lower()
+        if any(x in err_str for x in ("503", "overload", "unavailable")):
+            raise RuntimeError(
+                f"The AI service ({self.provider}) is overloaded (503). "
+                f"This is a temporary issue on their end — please try again in a minute.\n\n"
+                f"Original error: {last_exc}"
+            ) from last_exc
+        if any(x in err_str for x in ("429", "rate", "quota")):
+            raise RuntimeError(
+                f"Rate limit or quota exceeded for {self.provider}. "
+                f"Wait a moment then try again.\n\nOriginal error: {last_exc}"
+            ) from last_exc
+        raise last_exc
