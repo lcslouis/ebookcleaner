@@ -39,6 +39,7 @@ class BookEditorWidget(QWidget):
         self._current_book_id = None
         self._current_chapter_id = None
         self._saving = False
+        self._pending: dict = {}   # chapter_id → (cleaned_content, rewritten_content)
         self._thread_pool = QThreadPool.globalInstance()
         self._build_ui()
         self._show_empty()
@@ -267,14 +268,14 @@ class BookEditorWidget(QWidget):
         self.batch_grammar_btn.setEnabled(False)
         self.batch_rewrite_btn.setEnabled(False)
         self.create_rule_btn.setEnabled(False)
+        self._pending.clear()
         self._current_book_id = None
         self._current_chapter_id = None
 
     def load_book(self, book_id):
-        # Auto-save current chapter before switching
         if self._current_chapter_id and not self._saving:
             self._save_chapter(silent=True)
-
+        self._pending.clear()
         self._current_book_id = book_id
         book = self.db.get_book(book_id)
         if not book:
@@ -301,6 +302,8 @@ class BookEditorWidget(QWidget):
         self.chapter_list.clear()
         for ch in chapters:
             label = f"Ch. {ch['chapter_number']}: {ch['title'] or 'Untitled'}"
+            if ch["id"] in self._pending:
+                label = "* " + label
             item = QListWidgetItem(label)
             item.setData(Qt.UserRole, ch["id"])
             self.chapter_list.addItem(item)
@@ -335,18 +338,43 @@ class BookEditorWidget(QWidget):
 
         self._saving = True
         self.original_edit.setPlainText(ch["original_content"] or "")
-        self.cleaned_edit.setPlainText(ch["cleaned_content"] or "")
-        self.rewritten_edit.setPlainText(ch["rewritten_content"] or "")
+        if chapter_id in self._pending:
+            cleaned, rewritten = self._pending[chapter_id]
+        else:
+            cleaned  = ch["cleaned_content"]  or ""
+            rewritten = ch["rewritten_content"] or ""
+        self.cleaned_edit.setPlainText(cleaned)
+        self.rewritten_edit.setPlainText(rewritten)
         self._saving = False
 
         self.save_btn.setEnabled(True)
-        self.status_label.setText(f"Status: {ch['status']}")
+        status_txt = f"Status: {ch['status']}"
+        if chapter_id in self._pending:
+            status_txt += "  (unsaved)"
+        self.status_label.setText(status_txt)
         self._update_word_count()
 
     def _on_text_changed(self):
         if not self._saving:
             self.save_btn.setEnabled(True)
             self._update_word_count()
+            if self._current_chapter_id:
+                self._pending[self._current_chapter_id] = (
+                    self.cleaned_edit.toPlainText(),
+                    self.rewritten_edit.toPlainText(),
+                )
+                self._mark_chapter_dirty(self._current_chapter_id, True)
+
+    def _mark_chapter_dirty(self, chapter_id: int, dirty: bool):
+        for i in range(self.chapter_list.count()):
+            item = self.chapter_list.item(i)
+            if item and item.data(Qt.UserRole) == chapter_id:
+                text = item.text()
+                if dirty and not text.startswith("* "):
+                    item.setText("* " + text)
+                elif not dirty and text.startswith("* "):
+                    item.setText(text[2:])
+                break
 
     def _update_word_count(self):
         tab = self.tabs.currentIndex()
@@ -450,28 +478,41 @@ class BookEditorWidget(QWidget):
         )
 
     def _save_chapter(self, silent=False):
-        if not self._current_chapter_id:
+        # Capture current editor state into pending first
+        if self._current_chapter_id:
+            self._pending[self._current_chapter_id] = (
+                self.cleaned_edit.toPlainText(),
+                self.rewritten_edit.toPlainText(),
+            )
+
+        if not self._pending:
             return
+
         self._saving = True
-        cleaned = self.cleaned_edit.toPlainText()
-        rewritten = self.rewritten_edit.toPlainText()
+        current_status = "original"
 
-        status = "original"
-        if rewritten.strip():
-            status = "rewritten"
-        elif cleaned.strip():
-            status = "cleaned"
+        for chapter_id, (cleaned, rewritten) in list(self._pending.items()):
+            status = "original"
+            if rewritten.strip():
+                status = "rewritten"
+            elif cleaned.strip():
+                status = "cleaned"
 
-        self.db.update_chapter(
-            self._current_chapter_id,
-            cleaned_content=cleaned,
-            rewritten_content=rewritten,
-            word_count=len(cleaned.split()) if cleaned.strip() else 0,
-            status=status,
-        )
+            self.db.update_chapter(
+                chapter_id,
+                cleaned_content=cleaned,
+                rewritten_content=rewritten,
+                word_count=len(cleaned.split()) if cleaned.strip() else 0,
+                status=status,
+            )
+            self._mark_chapter_dirty(chapter_id, False)
+            if chapter_id == self._current_chapter_id:
+                current_status = status
+
+        self._pending.clear()
         self._saving = False
         self.save_btn.setEnabled(False)
-        self.status_label.setText(f"Status: {status}")
+        self.status_label.setText(f"Status: {current_status}")
         if not silent:
             self.chapter_saved.emit()
 
@@ -613,6 +654,7 @@ class BookEditorWidget(QWidget):
     def _open_batch_rules(self):
         if not self._current_book_id:
             return
+        self._save_chapter(silent=True)   # flush unsaved edits before batch overwrites DB
         from src.ui.batch_dialog import BatchDialog
         dlg = BatchDialog(self.db, self._current_book_id, "rules", parent=self)
         dlg.exec()
@@ -622,6 +664,7 @@ class BookEditorWidget(QWidget):
     def _open_batch_grammar(self):
         if not self._current_book_id:
             return
+        self._save_chapter(silent=True)
         proc = self._get_ai_processor()
         if not proc:
             return
@@ -634,6 +677,7 @@ class BookEditorWidget(QWidget):
     def _open_batch_rewrite(self):
         if not self._current_book_id:
             return
+        self._save_chapter(silent=True)
         proc = self._get_ai_processor()
         if not proc:
             return
