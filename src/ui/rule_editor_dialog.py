@@ -144,6 +144,11 @@ class RuleEditorDialog(QDialog):
         self.del_btn.clicked.connect(self._delete_rule)
         btn_row.addWidget(self.del_btn)
 
+        self.copy_btn = QPushButton("Copy from Book…")
+        self.copy_btn.setObjectName("secondary")
+        self.copy_btn.clicked.connect(self._copy_from_book)
+        btn_row.addWidget(self.copy_btn)
+
         btn_row.addStretch()
 
         self.up_btn = QPushButton("↑")
@@ -296,6 +301,52 @@ class RuleEditorDialog(QDialog):
         self._load_rules()
         self.rule_list.setCurrentRow(new_row)
 
+    def _copy_from_book(self):
+        dlg = _BookPickerDialog(self.db, exclude_book_id=self.book_id, parent=self)
+        if dlg.exec() != QDialog.Accepted:
+            return
+        source_id = dlg.get_book_id()
+        if source_id is None:
+            return
+
+        source_rules = self.db.get_custom_rules(source_id)
+        if not source_rules:
+            QMessageBox.information(self, "No Rules", "That book has no custom rules to copy.")
+            return
+
+        source_book = self.db.get_book(source_id)
+        source_name = source_book["title"] if source_book else "that book"
+        n = len(source_rules)
+
+        msg = QMessageBox(self)
+        msg.setWindowTitle("Copy Rules")
+        msg.setText(f"Copy {n} rule{'s' if n != 1 else ''} from \"{source_name}\".")
+        msg.setInformativeText(
+            "Append adds them after your existing rules.\n"
+            "Replace removes your current rules first."
+        )
+        append_btn  = msg.addButton("Append",  QMessageBox.AcceptRole)
+        replace_btn = msg.addButton("Replace", QMessageBox.DestructiveRole)
+        msg.addButton("Cancel", QMessageBox.RejectRole)
+        msg.exec()
+
+        clicked = msg.clickedButton()
+        if clicked == replace_btn:
+            for rule in self._rules:
+                self.db.delete_custom_rule(rule["id"])
+        elif clicked != append_btn:
+            return
+
+        for rule in source_rules:
+            self.db.add_custom_rule(
+                self.book_id,
+                rule.get("rule_name", ""),
+                rule["pattern"],
+                rule.get("replacement", ""),
+                bool(rule.get("is_regex", 0)),
+            )
+        self._load_rules()
+
     def _run_preview(self):
         from src.cleaner import TextCleaner
         rules = self.db.get_custom_rules(self.book_id)
@@ -321,3 +372,61 @@ class RuleEditorDialog(QDialog):
             data["replacement"], bool(data["is_regex"])
         )
         self._load_rules()
+
+
+# ------------------------------------------------------------------ book picker
+
+class _BookPickerDialog(QDialog):
+    def __init__(self, db, exclude_book_id: int, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Copy Rules From…")
+        self.setMinimumWidth(400)
+        self.setModal(True)
+        self._selected_book_id = None
+        self._build_ui(db, exclude_book_id)
+
+    def _build_ui(self, db, exclude_book_id: int):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(10)
+
+        note = QLabel("Select a book to copy its cleaning rules from:")
+        note.setObjectName("subtext")
+        layout.addWidget(note)
+
+        self.book_list = QListWidget()
+        books = db.get_all_books()
+        for book in books:
+            if book["id"] == exclude_book_id:
+                continue
+            rules = db.get_custom_rules(book["id"])
+            if not rules:
+                continue
+            label = book["title"]
+            if book.get("author"):
+                label += f"  —  {book['author']}"
+            label += f"  ({len(rules)} rule{'s' if len(rules) != 1 else ''})"
+            item = QListWidgetItem(label)
+            item.setData(Qt.UserRole, book["id"])
+            self.book_list.addItem(item)
+
+        if self.book_list.count() == 0:
+            self.book_list.addItem("No other books have custom rules yet.")
+            self.book_list.setEnabled(False)
+
+        self.book_list.itemDoubleClicked.connect(lambda _: self._accept())
+        layout.addWidget(self.book_list)
+
+        btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        btns.accepted.connect(self._accept)
+        btns.rejected.connect(self.reject)
+        layout.addWidget(btns)
+
+    def _accept(self):
+        item = self.book_list.currentItem()
+        if item and item.data(Qt.UserRole) is not None:
+            self._selected_book_id = item.data(Qt.UserRole)
+            self.accept()
+
+    def get_book_id(self) -> int:
+        return self._selected_book_id
