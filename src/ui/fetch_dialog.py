@@ -169,6 +169,7 @@ class FetchDialog(QDialog):
         self.first_chapter_edit.setPlaceholderText(
             "https://example.com/novel/chapter-1/  (leave blank to use TOC page)"
         )
+        self.first_chapter_edit.textChanged.connect(self._on_first_chapter_changed)
         adv_layout.addRow("First chapter URL:", self.first_chapter_edit)
 
         first_ch_hint = QLabel(
@@ -181,6 +182,11 @@ class FetchDialog(QDialog):
 
         root.addWidget(adv_group)
         self._adv_group = adv_group
+        adv_group.toggled.connect(lambda checked: (
+            self.crawl_bg_btn.setVisible(
+                checked and bool(self.first_chapter_edit.text().strip())
+            ) if self.crawl_bg_btn else None
+        ))
 
         sep2 = QFrame(); sep2.setFrameShape(QFrame.HLine)
         root.addWidget(sep2)
@@ -272,6 +278,17 @@ class FetchDialog(QDialog):
         bottom_row.addWidget(self.cancel_btn)
 
         if self._download_manager:
+            # Background crawl button — shown only when first chapter URL is set
+            self.crawl_bg_btn = QPushButton("Crawl in Background")
+            self.crawl_bg_btn.setObjectName("secondary")
+            self.crawl_bg_btn.setVisible(False)
+            self.crawl_bg_btn.setToolTip(
+                "Discover all chapters by following next-chapter links in the background.\n"
+                "No need to wait — track progress in the Downloads panel."
+            )
+            self.crawl_bg_btn.clicked.connect(self._start_crawl_background)
+            bottom_row.addWidget(self.crawl_bg_btn)
+
             bg_label = "Update in Background" if self._update_book_id else "Fetch in Background"
             self.bg_btn = QPushButton(bg_label)
             self.bg_btn.setObjectName("secondary")
@@ -284,6 +301,7 @@ class FetchDialog(QDialog):
             bottom_row.addWidget(self.bg_btn)
         else:
             self.bg_btn = None
+            self.crawl_bg_btn = None
 
         fg_label = "Fetch New Chapters" if self._update_book_id else "Fetch & Import"
         self.fetch_btn = QPushButton(fg_label)
@@ -659,6 +677,40 @@ class FetchDialog(QDialog):
         )
         self._download_manager.add_task(task)
         self.reject()   # close dialog; task keeps running independently
+
+    def _on_first_chapter_changed(self, text: str):
+        """Show the background crawl button whenever a first chapter URL is present."""
+        if self.crawl_bg_btn:
+            self.crawl_bg_btn.setVisible(
+                self._adv_group.isChecked() and bool(text.strip())
+            )
+
+    def _start_crawl_background(self):
+        """Start a background crawl+fetch without waiting for the chapter list first."""
+        toc_url       = self.url_edit.text().strip()
+        first_chapter = self.first_chapter_edit.text().strip()
+        if not first_chapter:
+            return
+
+        from src.web_fetcher import WebFetcher
+        from src.ui.download_manager import CrawlTask
+        selector = self.selector_edit.text().strip() if self._adv_group.isChecked() else ""
+        fetcher  = WebFetcher(delay=self.delay_spin.value(), content_selector=selector,
+                              cookies=self._get_cookies(),
+                              parser_override=self._get_parser_override())
+
+        task = CrawlTask(
+            db=self.db,
+            fetcher=fetcher,
+            toc_url=toc_url,
+            first_chapter_url=first_chapter,
+            update_book_id=self._update_book_id,
+            custom_title=self.title_edit.text().strip(),
+            custom_author=self.author_edit.text().strip(),
+            source_url=toc_url,
+        )
+        self._download_manager.add_task(task)
+        self.reject()   # close dialog immediately
 
     def _get_selected_chapters(self) -> list:
         return [

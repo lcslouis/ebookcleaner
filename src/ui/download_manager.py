@@ -299,7 +299,265 @@ class DownloadTask(QObject):
         self.result_book_id = book_id
 
 
-# ------------------------------------------------------------------ manager
+# ------------------------------------------------------------------ crawl task
+
+class _CrawlFetchWorker(QThread):
+    """Two-phase worker: crawl next-chapter links, then fetch content for each."""
+
+    phase_crawl   = Signal(int)          # chapters_found so far
+    chapter_done  = Signal(int, int, str)
+    status_update = Signal(str)
+    finished      = Signal(list)         # [{title, content, url, error}]
+    error         = Signal(str)
+    blocked_403   = Signal(str, str)     # url, chapter_title
+
+    def __init__(self, fetcher, toc_url: str, first_chapter_url: str):
+        super().__init__()
+        self.fetcher           = fetcher
+        self.toc_url           = toc_url
+        self.first_chapter_url = first_chapter_url
+        self._cancelled        = False
+        self._pause_event      = threading.Event()
+        self._pause_event.set()
+        self._skip_blocked     = False
+
+    def cancel(self):
+        self._cancelled = True
+        self._pause_event.set()
+
+    def resume(self, skip: bool = False):
+        self._skip_blocked = skip
+        self._pause_event.set()
+
+    def run(self):
+        # ---- Phase 1: crawl ----
+        try:
+            toc_info = self.fetcher.fetch_toc_by_crawl(
+                self.toc_url,
+                self.first_chapter_url,
+                progress_cb=lambda n: self.phase_crawl.emit(n),
+            )
+        except Exception as e:
+            self.error.emit(str(e))
+            return
+
+        if self._cancelled:
+            self.finished.emit([])
+            return
+
+        chapters = toc_info.get("chapters") or []
+        total = len(chapters)
+        if not chapters:
+            self.error.emit("Crawl found no chapters.")
+            return
+
+        # Attach metadata for saving (store on self so CrawlTask can read it)
+        self.toc_info = toc_info
+
+        # ---- Phase 2: fetch content ----
+        results = []
+        for i, ch in enumerate(chapters):
+            if self._cancelled:
+                break
+            content, err = self._fetch_one(ch["url"], ch["title"], i + 1, total)
+            if err:
+                content = f"[Chapter could not be downloaded: {err}]"
+            results.append({"title": ch["title"], "content": content,
+                            "url": ch["url"], "error": err})
+            self.chapter_done.emit(i + 1, total, ch["title"])
+
+        self.finished.emit(results)
+
+    def _fetch_one(self, url, title, idx, total):
+        max_retries = 3
+        last_err = None
+        for attempt in range(max_retries + 1):
+            if self._cancelled:
+                return "", "Cancelled"
+            try:
+                return self.fetcher.fetch_chapter(url), None
+            except _requests.exceptions.HTTPError as e:
+                code = e.response.status_code if e.response is not None else 0
+                if code == 403:
+                    self.blocked_403.emit(url, title)
+                    self._pause_event.clear()
+                    self._pause_event.wait()
+                    if self._cancelled:
+                        return "", "Cancelled"
+                    if self._skip_blocked:
+                        self._skip_blocked = False
+                        return "", "403 Forbidden — skipped"
+                    self._pause_event.set()
+                    try:
+                        return self.fetcher.fetch_chapter(url), None
+                    except Exception as re:
+                        return "", str(re)
+                if code == 404:
+                    return "", "404 Not Found"
+                if code == 429:
+                    if attempt < max_retries:
+                        wait = 10 * (2 ** attempt)
+                        self.status_update.emit(
+                            f"Rate limited — waiting {wait}s ({idx}/{total}: {title[:30]}…)"
+                        )
+                        time.sleep(wait)
+                        last_err = f"429 rate limit"
+                        continue
+                    return "", "429 Too Many Requests"
+                if 500 <= code < 600:
+                    if attempt < max_retries:
+                        wait = 5 * (2 ** attempt)
+                        self.status_update.emit(
+                            f"Server error {code} — retrying in {wait}s"
+                        )
+                        time.sleep(wait)
+                        last_err = str(e)
+                        continue
+                    return "", f"Server error {code}"
+                return "", str(e)
+            except (_requests.exceptions.ConnectionError,
+                    _requests.exceptions.Timeout) as e:
+                if attempt < max_retries:
+                    wait = 5 * (2 ** attempt)
+                    self.status_update.emit(f"Connection error — retrying in {wait}s")
+                    time.sleep(wait)
+                    last_err = str(e)
+                    continue
+                return "", f"Connection error: {e}"
+            except Exception as e:
+                return "", str(e)
+        return "", last_err or "Unknown error"
+
+
+class CrawlTask(QObject):
+    """Crawl + fetch task that can be handed to DownloadManager.
+
+    Shares the same signal and attribute interface as DownloadTask so it
+    works with _DownloadRowWidget and DownloadManager unchanged.
+    """
+
+    progress_changed = Signal(int, int, str)
+    completed        = Signal(str)
+    failed           = Signal(str, str)
+    blocked_403      = Signal(str, str, str)
+
+    STATUS_RUNNING   = DownloadTask.STATUS_RUNNING
+    STATUS_DONE      = DownloadTask.STATUS_DONE
+    STATUS_ERROR     = DownloadTask.STATUS_ERROR
+    STATUS_CANCELLED = DownloadTask.STATUS_CANCELLED
+    STATUS_BLOCKED   = DownloadTask.STATUS_BLOCKED
+
+    def __init__(self, *, db, fetcher, toc_url: str, first_chapter_url: str,
+                 update_book_id=None, cover_data=b"", cover_mime="image/jpeg",
+                 custom_title="", custom_author="", source_url=""):
+        super().__init__()
+        self.task_id          = uuid.uuid4().hex[:8]
+        self.db               = db
+        self.fetcher          = fetcher
+        self.toc_url          = toc_url
+        self.first_chapter_url = first_chapter_url
+        self.update_book_id   = update_book_id
+        self.cover_data       = cover_data
+        self.cover_mime       = cover_mime
+        self.custom_title     = custom_title
+        self.custom_author    = custom_author
+        self.source_url       = source_url
+        self.book_title       = custom_title or "Crawling chapters…"
+
+        self.status        = self.STATUS_RUNNING
+        self.done_count    = 0
+        self.total_count   = 0    # unknown until crawl completes
+        self.failed_count  = 0
+        self.current_chapter = ""
+        self.error_msg     = ""
+        self.result_book_id: int = 0
+
+        self._worker = _CrawlFetchWorker(fetcher, toc_url, first_chapter_url)
+        self._worker.phase_crawl.connect(self._on_crawl_progress)
+        self._worker.chapter_done.connect(self._on_chapter_done)
+        self._worker.status_update.connect(self._on_status_update)
+        self._worker.finished.connect(self._on_finished)
+        self._worker.error.connect(self._on_error)
+        self._worker.blocked_403.connect(self._on_blocked_403)
+
+    def start(self):
+        self._worker.start()
+
+    def cancel(self):
+        self._worker.cancel()
+        self.status = self.STATUS_CANCELLED
+
+    def resume_after_403(self, skip: bool = False):
+        self.status = self.STATUS_RUNNING
+        self._worker.resume(skip=skip)
+
+    # ------------------------------------------------------------------ slots
+
+    def _on_crawl_progress(self, n: int):
+        self.total_count = 0   # keep indeterminate bar during crawl
+        self.progress_changed.emit(0, 0, f"Crawling… {n} chapter{'s' if n != 1 else ''} found")
+
+    def _on_chapter_done(self, idx, total, title):
+        self.done_count  = idx
+        self.total_count = total
+        self.current_chapter = title
+        self.progress_changed.emit(idx, total, title)
+
+    def _on_status_update(self, msg):
+        self.current_chapter = msg
+        self.progress_changed.emit(self.done_count, self.total_count, msg)
+
+    def _on_finished(self, results):
+        self.failed_count = sum(1 for ch in results if ch.get("error"))
+        # Pull toc_info from the worker (set after crawl phase)
+        toc_info = getattr(self._worker, "toc_info", {})
+        if not self.custom_title and toc_info.get("title"):
+            self.book_title = toc_info["title"]
+        try:
+            self._save(results, toc_info)
+            self.status = self.STATUS_DONE
+            self.completed.emit(self.task_id)
+        except Exception as e:
+            self.status = self.STATUS_ERROR
+            self.error_msg = str(e)
+            self.failed.emit(self.task_id, str(e))
+
+    def _on_blocked_403(self, url: str, title: str):
+        self.status = self.STATUS_BLOCKED
+        self.blocked_403.emit(self.task_id, url, title)
+
+    def _on_error(self, msg: str):
+        self.status = self.STATUS_ERROR
+        self.error_msg = msg
+        self.failed.emit(self.task_id, msg)
+
+    # ------------------------------------------------------------------ save (reuses DownloadTask logic)
+
+    def _save(self, chapter_results, toc_info: dict):
+        if self.update_book_id:
+            task = DownloadTask(
+                db=self.db, fetcher=self.fetcher,
+                selected_chapters=[], toc_info=toc_info,
+                update_book_id=self.update_book_id,
+                cover_data=self.cover_data, cover_mime=self.cover_mime,
+                custom_title=self.custom_title, custom_author=self.custom_author,
+                source_url=self.source_url,
+            )
+            task._save_update(chapter_results)
+            self.result_book_id = task.result_book_id
+        else:
+            task = DownloadTask(
+                db=self.db, fetcher=self.fetcher,
+                selected_chapters=[], toc_info=toc_info,
+                cover_data=self.cover_data, cover_mime=self.cover_mime,
+                custom_title=self.custom_title, custom_author=self.custom_author,
+                source_url=self.source_url,
+            )
+            task._save_new(chapter_results)
+            self.result_book_id = task.result_book_id
+
+
+
 
 class DownloadManager(QObject):
     """Owns all DownloadTask objects; UI widgets observe this object."""
@@ -316,7 +574,7 @@ class DownloadManager(QObject):
 
     # ------------------------------------------------------------------ public
 
-    def add_task(self, task: DownloadTask):
+    def add_task(self, task):
         was_idle = self.active_count() == 0
         task.progress_changed.connect(lambda *_: self.tasks_changed.emit())
         task.completed.connect(self._on_task_done)
@@ -344,8 +602,8 @@ class DownloadManager(QObject):
         return list(self._tasks)
 
     def active_count(self) -> int:
-        return sum(1 for t in self._tasks
-                   if t.status in (DownloadTask.STATUS_RUNNING, DownloadTask.STATUS_BLOCKED))
+        active = {DownloadTask.STATUS_RUNNING, DownloadTask.STATUS_BLOCKED}
+        return sum(1 for t in self._tasks if t.status in active)
 
     def clear_finished(self):
         self._tasks = [t for t in self._tasks
