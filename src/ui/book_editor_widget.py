@@ -168,6 +168,15 @@ class BookEditorWidget(QWidget):
         self.batch_rewrite_btn.clicked.connect(self._open_batch_rewrite)
         toolbar_row.addWidget(self.batch_rewrite_btn)
 
+        vline2 = QFrame(); vline2.setFrameShape(QFrame.VLine)
+        toolbar_row.addWidget(vline2)
+
+        self.rename_chapters_btn = QPushButton("Rename Chapters…")
+        self.rename_chapters_btn.setObjectName("secondary")
+        self.rename_chapters_btn.setEnabled(False)
+        self.rename_chapters_btn.clicked.connect(self._open_rename_chapters)
+        toolbar_row.addWidget(self.rename_chapters_btn)
+
         toolbar_row.addStretch()
         editor_layout.addLayout(toolbar_row)
 
@@ -277,6 +286,7 @@ class BookEditorWidget(QWidget):
         self.batch_rules_btn.setEnabled(False)
         self.batch_grammar_btn.setEnabled(False)
         self.batch_rewrite_btn.setEnabled(False)
+        self.rename_chapters_btn.setEnabled(False)
         self.create_rule_btn.setEnabled(False)
         self.edit_toc_btn.setEnabled(False)
         self._pending.clear()
@@ -302,6 +312,7 @@ class BookEditorWidget(QWidget):
         self.batch_rules_btn.setEnabled(True)
         self.batch_grammar_btn.setEnabled(True)
         self.batch_rewrite_btn.setEnabled(True)
+        self.rename_chapters_btn.setEnabled(True)
         self.edit_toc_btn.setEnabled(True)
 
         self._refresh_cover_thumb(book_id)
@@ -728,6 +739,22 @@ class BookEditorWidget(QWidget):
         from src.ui.batch_dialog import BatchDialog
         dlg = BatchDialog(self.db, self._current_book_id, "rewrite", ai_processor=proc, parent=self)
         dlg.exec()
+        if self._current_chapter_id:
+            self._load_chapter(self._current_chapter_id)
+
+    def _open_rename_chapters(self):
+        if not self._current_book_id:
+            return
+        chapters = self.db.get_chapters(self._current_book_id)
+        if not chapters:
+            return
+        from src.ui.rename_chapters_dialog import RenameChaptersDialog
+        dlg = RenameChaptersDialog(chapters, parent=self)
+        if dlg.exec() != RenameChaptersDialog.Accepted:
+            return
+        for ch_id, new_title in dlg.result_titles():
+            self.db.update_chapter(ch_id, title=new_title)
+        self._load_chapter_list()
         if self._current_chapter_id:
             self._load_chapter(self._current_chapter_id)
 
