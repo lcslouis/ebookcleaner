@@ -102,6 +102,16 @@ class MainWindow(QMainWindow):
 
         tb.addSeparator()
 
+        sync_action = QAction("Sync", self)
+        sync_action.setToolTip(
+            "Back up or restore your library to/from a cloud folder "
+            "(OneDrive, Google Drive, Dropbox, etc.)"
+        )
+        sync_action.triggered.connect(self._open_sync)
+        tb.addAction(sync_action)
+
+        tb.addSeparator()
+
         self._downloads_action = QAction("Downloads", self)
         self._downloads_action.setToolTip("Show / hide the downloads panel")
         self._downloads_action.triggered.connect(self._toggle_downloads_panel)
@@ -213,6 +223,10 @@ class MainWindow(QMainWindow):
         from src.ui.export_dialog import ExportDialog
         dlg = ExportDialog(self.db, book_id, self)
         dlg.exec()
+
+    def _open_sync(self):
+        from src.ui.sync_dialog import SyncDialog
+        SyncDialog(self.db, self).exec()
 
     def _open_settings(self):
         dlg = SettingsDialog(self.db, self)
