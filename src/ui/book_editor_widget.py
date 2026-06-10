@@ -108,9 +108,17 @@ class BookEditorWidget(QWidget):
         ch_layout.setContentsMargins(0, 0, 0, 0)
         ch_layout.setSpacing(6)
 
+        ch_header_row = QHBoxLayout()
         ch_label = QLabel("Chapters")
         ch_label.setObjectName("subtext")
-        ch_layout.addWidget(ch_label)
+        ch_header_row.addWidget(ch_label)
+        ch_header_row.addStretch()
+        self.edit_toc_btn = QPushButton("Edit TOC…")
+        self.edit_toc_btn.setObjectName("secondary")
+        self.edit_toc_btn.setEnabled(False)
+        self.edit_toc_btn.clicked.connect(self._open_toc_editor)
+        ch_header_row.addWidget(self.edit_toc_btn)
+        ch_layout.addLayout(ch_header_row)
 
         self.chapter_list = QListWidget()
         self.chapter_list.setSelectionMode(QListWidget.ExtendedSelection)
@@ -268,6 +276,7 @@ class BookEditorWidget(QWidget):
         self.batch_grammar_btn.setEnabled(False)
         self.batch_rewrite_btn.setEnabled(False)
         self.create_rule_btn.setEnabled(False)
+        self.edit_toc_btn.setEnabled(False)
         self._pending.clear()
         self._current_book_id = None
         self._current_chapter_id = None
@@ -291,6 +300,7 @@ class BookEditorWidget(QWidget):
         self.batch_rules_btn.setEnabled(True)
         self.batch_grammar_btn.setEnabled(True)
         self.batch_rewrite_btn.setEnabled(True)
+        self.edit_toc_btn.setEnabled(True)
 
         self._refresh_cover_thumb(book_id)
         self._load_chapter_list()
@@ -550,6 +560,20 @@ class BookEditorWidget(QWidget):
             return AIProcessor(provider=provider, ollama_host=host, ollama_model=model)
 
         return None
+
+    # ------------------------------------------------------------------ TOC editor
+
+    def _open_toc_editor(self):
+        if not self._current_book_id:
+            return
+        from src.ui.toc_editor_dialog import TOCEditorDialog
+        dlg = TOCEditorDialog(self.db, self._current_book_id, parent=self)
+        dlg.toc_changed.connect(self._on_toc_changed)
+        dlg.exec()
+
+    def _on_toc_changed(self):
+        """Refresh the chapter list and re-select the current chapter after a TOC edit."""
+        self._load_chapter_list()
 
     # ------------------------------------------------------------------ chapter context menu
 
