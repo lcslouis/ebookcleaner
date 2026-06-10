@@ -9,9 +9,27 @@ the foreground dialog and background tasks share the same worker.
 """
 import time
 import uuid
+import sys
 from pathlib import Path
 from PySide6.QtCore import QObject, Signal, QThread
 import requests as _requests
+
+
+# ------------------------------------------------------------------ screen-wake helper
+
+def _keep_awake(active: bool) -> None:
+    """Prevent screen saver / display sleep while downloads run (Windows only)."""
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        ES_CONTINUOUS       = 0x80000000
+        ES_SYSTEM_REQUIRED  = 0x00000001
+        ES_DISPLAY_REQUIRED = 0x00000002
+        flags = ES_CONTINUOUS | (ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED if active else 0)
+        ctypes.windll.kernel32.SetThreadExecutionState(flags)
+    except Exception:
+        pass
 
 
 # ------------------------------------------------------------------ worker
@@ -258,11 +276,14 @@ class DownloadManager(QObject):
     # ------------------------------------------------------------------ public
 
     def add_task(self, task: DownloadTask):
+        was_idle = self.active_count() == 0
         task.progress_changed.connect(lambda *_: self.tasks_changed.emit())
         task.completed.connect(self._on_task_done)
         task.failed.connect(lambda _tid, _msg: self._on_task_failed())
         self._tasks.insert(0, task)
         task.start()
+        if was_idle:
+            _keep_awake(True)
         self.task_added.emit(task)
         self.tasks_changed.emit()
         self.active_count_changed.emit(self.active_count())
@@ -272,6 +293,8 @@ class DownloadManager(QObject):
             if t.task_id == task_id:
                 t.cancel()
                 break
+        if self.active_count() == 0:
+            _keep_awake(False)
         self.tasks_changed.emit()
         self.active_count_changed.emit(self.active_count())
 
@@ -293,9 +316,13 @@ class DownloadManager(QObject):
             if t.task_id == task_id and t.result_book_id:
                 self.book_saved.emit(t.result_book_id)
                 break
+        if self.active_count() == 0:
+            _keep_awake(False)
         self.tasks_changed.emit()
         self.active_count_changed.emit(self.active_count())
 
     def _on_task_failed(self):
+        if self.active_count() == 0:
+            _keep_awake(False)
         self.tasks_changed.emit()
         self.active_count_changed.emit(self.active_count())
