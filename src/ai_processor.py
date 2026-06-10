@@ -162,7 +162,7 @@ class AIProcessor:
                             max_output_tokens=8192,
                         ),
                     )
-                    return response.text
+                    return response.text or ""
 
                 elif self.provider in (PROVIDER_GROQ, PROVIDER_OLLAMA):
                     model = GROQ_MODEL if self.provider == PROVIDER_GROQ else self.ollama_model

@@ -1,99 +1,123 @@
 """
-Site login browser — runs as a subprocess via:
-    python main.py --webview-login <url> <output_json>
+Site login browser — uses PySide6.QtWebEngineWidgets so no pywebview,
+pythonnet, or .NET runtime is required.
 
-Opens a pywebview/WebView2 window so the user can log in normally.
-A floating "Done — Save Login" button injects into every page.
-When clicked, all cookies (including httpOnly via window.get_cookies())
-are written to the output JSON file and the window closes.
+Opens a full browser dialog inside the app.  Cookies are captured
+automatically via QWebEngineCookieStore.cookieAdded.  When the user
+clicks "Done — Save Login" the dialog closes and returns the cookies.
 """
-import json
-import threading
+from PySide6.QtWidgets import (
+    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QProgressBar
+)
+from PySide6.QtCore import Qt, QUrl
+from PySide6.QtWebEngineWidgets import QWebEngineView
+from PySide6.QtWebEngineCore import QWebEngineProfile, QWebEnginePage
 
 
-_DONE_BTN_JS = """
-(function() {
-    if (document.getElementById('_ec_done_btn')) return;
-    var b = document.createElement('button');
-    b.id = '_ec_done_btn';
-    b.textContent = '✓ Done — Save Login';
-    b.style.cssText = [
-        'position:fixed', 'bottom:18px', 'right:18px',
-        'z-index:2147483647', 'padding:9px 20px',
-        'background:#1d4ed8', 'color:#fff',
-        'border:none', 'border-radius:6px',
-        'font-size:14px', 'font-weight:600',
-        'cursor:pointer',
-        'box-shadow:0 2px 10px rgba(0,0,0,.4)'
-    ].join(';');
-    b.onmouseenter = function() { this.style.background = '#1e40af'; };
-    b.onmouseleave = function() { this.style.background = '#1d4ed8'; };
-    b.onclick = function() { pywebview.api.save_and_close(); };
-    document.body.appendChild(b);
-})();
-"""
+class LoginBrowserDialog(QDialog):
+    """Modal browser window for logging into a site and capturing session cookies."""
 
+    def __init__(self, url: str, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Site Login — EbookCleaner")
+        self.resize(1100, 820)
+        self.setWindowFlags(self.windowFlags() | Qt.WindowMaximizeButtonHint)
 
-def run_login_browser(url: str, output_file: str) -> None:
-    import webview
+        self._captured: list = []   # list of cookie dicts as they arrive
+        self._final_url: str = ""
 
-    result: dict = {"cookies": [], "final_url": ""}
-    _window = None
+        # Isolated profile so login cookies don't bleed into the app
+        self._profile = QWebEngineProfile("ec_login_profile", self)
+        self._profile.setPersistentCookiesPolicy(
+            QWebEngineProfile.NoPersistentCookies
+        )
+        cookie_store = self._profile.cookieStore()
+        cookie_store.cookieAdded.connect(self._on_cookie_added)
+        cookie_store.loadAllCookies()
 
-    class _Api:
-        def save_and_close(self):
-            nonlocal result
-            try:
-                cookies = _window.get_cookies()
-                result["cookies"] = [
-                    {
-                        "name":   c.name,
-                        "value":  c.value,
-                        "domain": getattr(c, "domain", ""),
-                        "path":   getattr(c, "path", "/"),
-                        "secure": bool(getattr(c, "secure", False)),
-                    }
-                    for c in cookies
-                ]
-            except Exception:
-                # Fallback: only non-httpOnly cookies via JS
-                try:
-                    raw = _window.evaluate_js("document.cookie") or ""
-                    cookies_list = []
-                    for part in raw.split(";"):
-                        part = part.strip()
-                        if "=" in part:
-                            name, _, value = part.partition("=")
-                            cookies_list.append({"name": name.strip(), "value": value.strip()})
-                    result["cookies"] = cookies_list
-                except Exception:
-                    pass
+        page = QWebEnginePage(self._profile, self)
+        self._view = QWebEngineView(self)
+        self._view.setPage(page)
+        self._view.loadStarted.connect(self._on_load_started)
+        self._view.loadFinished.connect(self._on_load_finished)
+        self._view.load(QUrl(url))
 
-            try:
-                result["final_url"] = _window.get_current_url() or ""
-            except Exception:
-                pass
+        # ---- UI layout ----
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
 
-            _window.destroy()
+        # Top hint bar
+        hint_bar = QHBoxLayout()
+        hint_bar.setContentsMargins(10, 6, 10, 6)
+        hint = QLabel(
+            "Log in to the site normally. "
+            "When you're done, click <b>Done — Save Login</b>."
+        )
+        hint.setObjectName("subtext")
+        hint_bar.addWidget(hint, 1)
+        layout.addLayout(hint_bar)
 
-    api = _Api()
-    _window = webview.create_window(
-        "Login — EbookCleaner",
-        url,
-        js_api=api,
-        width=1100,
-        height=800,
-    )
+        self._progress = QProgressBar()
+        self._progress.setRange(0, 100)
+        self._progress.setFixedHeight(3)
+        self._progress.setTextVisible(False)
+        self._progress.setStyleSheet(
+            "QProgressBar { border: none; background: transparent; }"
+            "QProgressBar::chunk { background: #1d4ed8; }"
+        )
+        self._view.loadProgress.connect(self._progress.setValue)
+        layout.addWidget(self._progress)
 
-    def _inject():
-        try:
-            _window.evaluate_js(_DONE_BTN_JS)
-        except Exception:
-            pass
+        layout.addWidget(self._view, 1)
 
-    _window.events.loaded += _inject
+        # Bottom bar
+        bottom = QHBoxLayout()
+        bottom.setContentsMargins(10, 8, 10, 8)
+        self._url_label = QLabel("")
+        self._url_label.setObjectName("subtext")
+        self._url_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        bottom.addWidget(self._url_label, 1)
 
-    webview.start()
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.setObjectName("secondary")
+        cancel_btn.clicked.connect(self.reject)
+        bottom.addWidget(cancel_btn)
 
-    with open(output_file, "w", encoding="utf-8") as fh:
-        json.dump(result, fh)
+        done_btn = QPushButton("✓  Done — Save Login")
+        done_btn.clicked.connect(self._done)
+        bottom.addWidget(done_btn)
+        layout.addLayout(bottom)
+
+    # ------------------------------------------------------------------ slots
+
+    def _on_cookie_added(self, cookie):
+        self._captured.append({
+            "name":   bytes(cookie.name()).decode("utf-8", errors="replace"),
+            "value":  bytes(cookie.value()).decode("utf-8", errors="replace"),
+            "domain": cookie.domain().lstrip("."),
+            "path":   cookie.path() or "/",
+            "secure": cookie.isSecure(),
+        })
+
+    def _on_load_started(self):
+        self._progress.setVisible(True)
+
+    def _on_load_finished(self, _ok):
+        self._progress.setVisible(False)
+        url = self._view.url().toString()
+        self._url_label.setText(url)
+        self._final_url = url
+
+    def _done(self):
+        self._final_url = self._view.url().toString()
+        self.accept()
+
+    # ------------------------------------------------------------------ result
+
+    def cookies(self) -> list:
+        """Return all cookies captured during the session."""
+        return self._captured
+
+    def final_url(self) -> str:
+        return self._final_url

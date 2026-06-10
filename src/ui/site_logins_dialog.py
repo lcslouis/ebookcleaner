@@ -1,55 +1,27 @@
 """
 Site Logins dialog — manage per-site cookies for authenticated scraping.
 
-Uses a pywebview subprocess so the user can log in via a real browser
-(WebView2/Edge on Windows). Cookies are saved to the DB and loaded
-automatically when fetching from those sites.
+Uses an embedded QtWebEngine browser (LoginBrowserDialog) so the user can
+log in via a real browser inside the app.  No subprocess, no .NET runtime,
+no pywebview required.  Cookies are saved to the DB and loaded automatically
+when fetching from those sites.
 """
 import json
-import os
-import subprocess
-import sys
-import tempfile
-from pathlib import Path
 from urllib.parse import urlparse
 
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QListWidget, QListWidgetItem, QMessageBox, QFrame, QInputDialog
 )
-from PySide6.QtCore import Qt, QThread, Signal
+from PySide6.QtCore import Qt
 
-
-class _LoginWatcher(QThread):
-    """Waits for the login subprocess to exit, then reads the output JSON."""
-    finished = Signal(list, str)   # cookies, final_url
-    error    = Signal(str)
-
-    def __init__(self, process, output_file: str):
-        super().__init__()
-        self._process    = process
-        self._output_file = output_file
-
-    def run(self):
-        self._process.wait()
-        try:
-            with open(self._output_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            self.finished.emit(data.get("cookies", []), data.get("final_url", ""))
-        except Exception as e:
-            self.error.emit(str(e))
-        finally:
-            try:
-                os.unlink(self._output_file)
-            except Exception:
-                pass
+from src.site_login import LoginBrowserDialog
 
 
 class SiteLoginsDialog(QDialog):
     def __init__(self, db, parent=None):
         super().__init__(parent)
-        self.db       = db
-        self._watcher = None
+        self.db = db
         self.setWindowTitle("Site Logins")
         self.setMinimumSize(560, 420)
         self._build_ui()
@@ -150,41 +122,19 @@ class SiteLoginsDialog(QDialog):
         )
         if not ok or not url.strip():
             return
-        url = url.strip()
-        self._launch_browser(url)
+        self._launch_browser(url.strip())
 
     def _launch_browser(self, url: str):
-        self.login_btn.setEnabled(False)
-        self.status_lbl.setText(
-            "Browser opening… log in, then click \"✓ Done — Save Login\"."
-        )
+        dlg = LoginBrowserDialog(url, parent=self)
+        if dlg.exec() != QDialog.Accepted:
+            self.status_lbl.setText("Login cancelled.")
+            return
 
-        tmp = tempfile.NamedTemporaryFile(suffix=".json", delete=False)
-        tmp.close()
-        output_file = tmp.name
-
-        if getattr(sys, "frozen", False):
-            # Packaged EXE: run the EXE directly — no script path needed
-            cmd = [sys.executable, "--webview-login", url, output_file]
-        else:
-            # Development: run the main.py script via the Python interpreter
-            main_py = str(Path(__file__).parent.parent.parent / "main.py")
-            cmd = [sys.executable, main_py, "--webview-login", url, output_file]
-
-        process = subprocess.Popen(cmd)
-
-        self._watcher = _LoginWatcher(process, output_file)
-        self._watcher.finished.connect(self._on_login_done)
-        self._watcher.error.connect(self._on_login_error)
-        self._watcher.start()
-
-    def _on_login_done(self, cookies: list, final_url: str):
-        self.login_btn.setEnabled(True)
+        cookies = dlg.cookies()
+        final_url = dlg.final_url()
 
         if not cookies:
-            self.status_lbl.setText(
-                "No cookies were captured. Try logging in again."
-            )
+            self.status_lbl.setText("No cookies were captured. Try logging in again.")
             return
 
         # Group cookies by domain, stripping leading dot
@@ -208,10 +158,6 @@ class SiteLoginsDialog(QDialog):
         sites = ", ".join(domain_cookies.keys())
         self.status_lbl.setText(f"Saved {total} cookies for: {sites}")
         self._load()
-
-    def _on_login_error(self, msg: str):
-        self.login_btn.setEnabled(True)
-        self.status_lbl.setText(f"Error: {msg}")
 
     def _remove_selected(self):
         item = self.site_list.currentItem()
