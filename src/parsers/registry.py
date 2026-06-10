@@ -38,11 +38,19 @@ _CONFIG = get_config_parsers()
 _ALL_PARSERS = _DEDICATED + _CONFIG
 
 
-def get_parser(url: str, content_selector: str = "") -> object:
-    """Return the most specific parser for the given URL."""
+def get_parser(url: str, content_selector: str = "", soup=None) -> object:
+    """Return the most specific parser for the given URL.
+
+    If soup is provided, parsers that didn't match by URL get a second chance
+    via can_handle_soup() — used to detect themes like Fictioneer on unknown domains.
+    """
     for parser in _ALL_PARSERS:
         if parser.can_handle(url):
             return parser
+    if soup is not None:
+        for parser in _ALL_PARSERS:
+            if hasattr(parser, "can_handle_soup") and parser.can_handle_soup(soup):
+                return parser
     return DefaultParser(content_selector)
 
 

@@ -48,7 +48,7 @@ class WebFetcher:
         """
         html = self._get(url)
         soup = BeautifulSoup(html, "lxml")
-        parser = get_parser(url, self.content_selector)
+        parser = get_parser(url, self.content_selector, soup)
         info = parser.get_book_info(url, soup)
 
         # Resolve special placeholder chapters
@@ -60,7 +60,7 @@ class WebFetcher:
         """Fetch and return plain text content of a single chapter page."""
         html = self._get(url)
         soup = BeautifulSoup(html, "lxml")
-        parser = get_parser(url, self.content_selector)
+        parser = get_parser(url, self.content_selector, soup)
         return parser.get_chapter_content(url, soup)
 
     def download_image(self, url: str) -> tuple:
