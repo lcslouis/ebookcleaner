@@ -2,7 +2,7 @@ from PySide6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QSplitter, QToolBar,
     QStatusBar, QLabel, QMessageBox, QFrame
 )
-from PySide6.QtCore import Qt, QSize
+from PySide6.QtCore import Qt, QSize, QTimer
 from PySide6.QtGui import QAction
 
 from src.ui.book_list_widget import BookListWidget
@@ -31,6 +31,7 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._build_toolbar()
         self._build_statusbar()
+        QTimer.singleShot(400, self._check_sync_on_startup)
 
     def _build_ui(self):
         central = QWidget()
@@ -253,6 +254,89 @@ class MainWindow(QMainWindow):
             "Configure your Anthropic API key in <b>Settings</b>.",
         )
 
+    # ------------------------------------------------------------------ sync
+
+    def _check_sync_on_startup(self):
+        """If a sync folder is configured and its backup is newer than the
+        local DB, offer to restore it."""
+        sync_folder = self.db.get_setting("sync_folder", "")
+        if not sync_folder:
+            return
+
+        from pathlib import Path
+        sf = Path(sync_folder)
+        backup_db = sf / "library.db"
+        if not backup_db.exists():
+            return
+
+        from src.database import DB_PATH
+        import os
+        try:
+            backup_mtime  = backup_db.stat().st_mtime
+            local_mtime   = DB_PATH.stat().st_mtime if DB_PATH.exists() else 0.0
+        except OSError:
+            return
+
+        if backup_mtime <= local_mtime:
+            return
+
+        # Check if the user already skipped this exact backup version
+        skipped = self.db.get_setting("sync_skipped_mtime", "")
+        if skipped and abs(float(skipped) - backup_mtime) < 1:
+            return
+
+        from datetime import datetime
+        backup_ts = datetime.fromtimestamp(backup_mtime).strftime("%Y-%m-%d %H:%M")
+        reply = QMessageBox.question(
+            self,
+            "Newer Cloud Backup Found",
+            f"A newer backup from <b>{backup_ts}</b> was found in your sync folder.<br><br>"
+            "Restore it now? Your current library will be replaced.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+
+        if reply != QMessageBox.Yes:
+            # Remember so we don't prompt again for this same backup
+            self.db.set_setting("sync_skipped_mtime", str(backup_mtime))
+            return
+
+        # Restore
+        import shutil
+        from src.database import DB_DIR
+        covers_src = sf / "covers"
+        covers_dst = DB_DIR / "covers"
+        try:
+            shutil.copy2(backup_db, DB_PATH)
+            if covers_src.exists():
+                covers_dst.mkdir(parents=True, exist_ok=True)
+                for f in covers_src.iterdir():
+                    shutil.copy2(f, covers_dst / f.name)
+            self.db.reopen()
+            self.book_list.refresh()
+            self.editor._show_empty()
+            self._status_label.setText("Library restored from cloud backup")
+        except Exception as e:
+            QMessageBox.critical(self, "Restore Failed", str(e))
+
+    def _auto_backup(self):
+        """Silent backup called on exit. Runs synchronously in main thread."""
+        sync_folder = self.db.get_setting("sync_folder", "")
+        if not sync_folder:
+            return
+        from pathlib import Path
+        from src.ui.sync_dialog import _BackupWorker
+        self._status_label.setText("Backing up to sync folder…")
+        worker = _BackupWorker(self.db, Path(sync_folder))
+        try:
+            worker.run()
+        except Exception:
+            pass
+
     def closeEvent(self, event):
+        # Flush any unsaved chapter edits before backup
+        if self.editor._current_chapter_id:
+            self.editor._save_chapter(silent=True)
+        self._auto_backup()
         self.db.close()
         event.accept()

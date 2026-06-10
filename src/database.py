@@ -295,3 +295,11 @@ class Database:
 
     def close(self):
         self.conn.close()
+
+    def reopen(self):
+        """Close and reopen the connection (used after an in-place DB restore)."""
+        self.conn.close()
+        self.conn = sqlite3.connect(str(DB_PATH), check_same_thread=False)
+        self.conn.row_factory = sqlite3.Row
+        self.conn.execute("PRAGMA foreign_keys = ON")
+        self.initialize()
