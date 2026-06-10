@@ -61,6 +61,106 @@ class WebFetcher:
         info["chapters"] = self._normalize_chapter_titles(info["chapters"])
         return info
 
+    def fetch_toc_by_crawl(self, toc_url: str, first_chapter_url: str,
+                           progress_cb=None) -> dict:
+        """
+        Build a chapter list by following next-chapter links starting from
+        first_chapter_url.  Used when the TOC page doesn't list chapters in a
+        parseable format (e.g. Imunify360-protected WordPress sites).
+
+        Book metadata (title, author, description, cover) is fetched from
+        toc_url if provided; falls back to whatever is on the first chapter page.
+        progress_cb(n) is called after each chapter is discovered.
+        """
+        # Fetch book metadata from TOC page (best-effort)
+        info = {"title": "", "author": "", "description": "", "cover_url": "", "chapters": []}
+        if toc_url:
+            try:
+                html = self._get(toc_url)
+                soup = BeautifulSoup(html, "lxml")
+                parser = (get_parser_by_name(self._parser_override)
+                          or get_parser(toc_url, self.content_selector, soup))
+                meta = parser.get_book_info(toc_url, soup)
+                for k in ("title", "author", "description", "cover_url"):
+                    if meta.get(k):
+                        info[k] = meta[k]
+            except Exception:
+                pass
+
+        # Crawl chapter chain
+        chapters = []
+        visited = set()
+        url = first_chapter_url
+        limit = 2000
+
+        while url and len(chapters) < limit:
+            if url in visited:
+                break
+            visited.add(url)
+
+            try:
+                html = self._get(url)
+            except Exception as e:
+                if not chapters:
+                    raise
+                break
+
+            soup = BeautifulSoup(html, "lxml")
+            parser = (get_parser_by_name(self._parser_override)
+                      or get_parser(url, self.content_selector, soup))
+
+            # Extract chapter title from page
+            title = self._extract_chapter_title(soup, len(chapters) + 1)
+            chapters.append({"url": url, "title": title})
+            if progress_cb:
+                progress_cb(len(chapters))
+
+            url = self._find_next_chapter_url(soup, url)
+
+        info["chapters"] = self._normalize_chapter_titles(chapters)
+        return info
+
+    def _extract_chapter_title(self, soup, fallback_n: int) -> str:
+        for sel in ("h1.entry-title", "h1.chapter-title", "h2.chapter-title",
+                    ".chapter-title", "h1", "h2"):
+            el = soup.select_one(sel)
+            if el:
+                text = el.get_text(strip=True)
+                if text:
+                    return text
+        return f"Chapter {fallback_n}"
+
+    def _find_next_chapter_url(self, soup, current_url: str):
+        """Return the URL of the next chapter, or None if not found."""
+        # 1. rel="next" link in <head>
+        link_next = soup.find("link", rel="next")
+        if link_next and link_next.get("href"):
+            return urljoin(current_url, link_next["href"])
+
+        # 2. Anchor tags — look for next-chapter navigation patterns
+        next_texts = {"next chapter", "next", "next →", "→", "next chap",
+                      "next page", ">", ">>"}
+        next_classes = {"next-chapter", "next_chapter", "next-page",
+                        "nav-next", "btn-next", "nextchap"}
+
+        for a in soup.find_all("a", href=True):
+            href = a.get("href", "")
+            if not href or href.startswith("#") or href.startswith("javascript"):
+                continue
+            # Check rel="next"
+            if "next" in (a.get("rel") or []):
+                return urljoin(current_url, href)
+            # Check class
+            classes = set(a.get("class") or [])
+            if classes & next_classes:
+                return urljoin(current_url, href)
+            # Check link text
+            text = a.get_text(strip=True).lower()
+            if text in next_texts:
+                return urljoin(current_url, href)
+
+        return None
+
     def fetch_chapter(self, url: str) -> str:
         """Fetch and return plain text content of a single chapter page."""
         html = self._get(url)

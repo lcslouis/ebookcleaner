@@ -16,6 +16,7 @@ from src.ui.download_manager import _FetchWorker, _FetchSignals
 class _TocSignals(QObject):
     finished = Signal(dict)
     error = Signal(str)
+    progress = Signal(str)   # status message updates during crawl
 
 
 class _TocWorker(QThread):
@@ -28,6 +29,29 @@ class _TocWorker(QThread):
     def run(self):
         try:
             info = self.fetcher.fetch_toc(self.url)
+            self.signals.finished.emit(info)
+        except Exception as e:
+            self.signals.error.emit(str(e))
+
+
+class _TocCrawlWorker(QThread):
+    """Builds chapter list by following next-chapter links from a seed URL."""
+
+    def __init__(self, fetcher, toc_url, first_chapter_url):
+        super().__init__()
+        self.fetcher = fetcher
+        self.toc_url = toc_url
+        self.first_chapter_url = first_chapter_url
+        self.signals = _TocSignals()
+
+    def run(self):
+        try:
+            def on_progress(n):
+                self.signals.progress.emit(f"Found {n} chapter{'s' if n != 1 else ''}…")
+
+            info = self.fetcher.fetch_toc_by_crawl(
+                self.toc_url, self.first_chapter_url, progress_cb=on_progress
+            )
             self.signals.finished.emit(info)
         except Exception as e:
             self.signals.error.emit(str(e))
@@ -131,8 +155,8 @@ class FetchDialog(QDialog):
         override_row.addWidget(self._parser_combo, 1)
         root.addLayout(override_row)
 
-        # Advanced options (generic parser CSS selector)
-        adv_group = QGroupBox("Advanced (Generic Parser)")
+        # Advanced options (generic parser CSS selector + first chapter crawl)
+        adv_group = QGroupBox("Advanced Options")
         adv_group.setCheckable(True)
         adv_group.setChecked(False)
         adv_layout = QFormLayout(adv_group)
@@ -140,6 +164,21 @@ class FetchDialog(QDialog):
         self.selector_edit = QLineEdit()
         self.selector_edit.setPlaceholderText("e.g. div.chapter-text  (leave blank for auto-detect)")
         adv_layout.addRow("Content CSS selector:", self.selector_edit)
+
+        self.first_chapter_edit = QLineEdit()
+        self.first_chapter_edit.setPlaceholderText(
+            "https://example.com/novel/chapter-1/  (leave blank to use TOC page)"
+        )
+        adv_layout.addRow("First chapter URL:", self.first_chapter_edit)
+
+        first_ch_hint = QLabel(
+            "Use this when the TOC page doesn't list chapters. "
+            "The app will follow next-chapter links to discover all chapters automatically."
+        )
+        first_ch_hint.setObjectName("subtext")
+        first_ch_hint.setWordWrap(True)
+        adv_layout.addRow("", first_ch_hint)
+
         root.addWidget(adv_group)
         self._adv_group = adv_group
 
@@ -364,17 +403,27 @@ class FetchDialog(QDialog):
         url = self.url_edit.text().strip()
         if not url:
             return
-        self._set_loading(True, "Loading chapter list...")
 
         selector = self.selector_edit.text().strip() if self._adv_group.isChecked() else ""
+        first_chapter = (
+            self.first_chapter_edit.text().strip()
+            if self._adv_group.isChecked() else ""
+        )
         from src.web_fetcher import WebFetcher
         fetcher = WebFetcher(delay=self.delay_spin.value(), content_selector=selector,
                              cookies=self._get_cookies(),
                              parser_override=self._get_parser_override())
 
-        self._toc_worker = _TocWorker(fetcher, url)
+        if first_chapter:
+            self._set_loading(True, "Crawling chapters via next-chapter links…")
+            self._toc_worker = _TocCrawlWorker(fetcher, url, first_chapter)
+        else:
+            self._set_loading(True, "Loading chapter list...")
+            self._toc_worker = _TocWorker(fetcher, url)
+
         self._toc_worker.signals.finished.connect(self._on_toc_loaded)
         self._toc_worker.signals.error.connect(self._on_error)
+        self._toc_worker.signals.progress.connect(self.progress_label.setText)
         self._toc_worker.start()
 
     @Slot(dict)
