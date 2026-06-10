@@ -132,32 +132,73 @@ class WebFetcher:
 
     def _find_next_chapter_url(self, soup, current_url: str):
         """Return the URL of the next chapter, or None if not found."""
-        # 1. rel="next" link in <head>
-        link_next = soup.find("link", rel="next")
-        if link_next and link_next.get("href"):
-            return urljoin(current_url, link_next["href"])
+        from urllib.parse import urlparse, urlunparse
+        import re as _re
 
-        # 2. Anchor tags — look for next-chapter navigation patterns
-        next_texts = {"next chapter", "next", "next →", "→", "next chap",
-                      "next page", ">", ">>"}
-        next_classes = {"next-chapter", "next_chapter", "next-page",
-                        "nav-next", "btn-next", "nextchap"}
+        # 1. <link rel="next"> in <head> (most reliable)
+        for tag in soup.find_all("link"):
+            rel = tag.get("rel") or []
+            if isinstance(rel, str):
+                rel = [rel]
+            if "next" in rel and tag.get("href"):
+                return urljoin(current_url, tag["href"])
 
+        # 2. <a rel="next">
+        for a in soup.find_all("a", href=True):
+            rel = a.get("rel") or []
+            if isinstance(rel, str):
+                rel = [rel]
+            if "next" in rel:
+                return urljoin(current_url, a["href"])
+
+        # 3. Containers with next-nav class/id — grab first link inside them
+        next_containers = [
+            ".nav-next", ".navigation-next", ".next-chapter", ".nextchap",
+            ".btn-next", "#nav-next", ".chapter-nav-next",
+            "[class*='next']",   # any element whose class contains "next"
+        ]
+        for sel in next_containers:
+            try:
+                el = soup.select_one(sel)
+            except Exception:
+                continue
+            if el:
+                a = el if el.name == "a" else el.find("a", href=True)
+                if a and a.get("href"):
+                    href = a["href"]
+                    if not href.startswith("#") and not href.startswith("javascript"):
+                        return urljoin(current_url, href)
+
+        # 4. Anchor text patterns — broader matching with contains/startswith
+        next_keywords = ("next chapter", "next chap", "next →", "next »",
+                         "next >", "→", "»", ">>")
         for a in soup.find_all("a", href=True):
             href = a.get("href", "")
             if not href or href.startswith("#") or href.startswith("javascript"):
                 continue
-            # Check rel="next"
-            if "next" in (a.get("rel") or []):
-                return urljoin(current_url, href)
-            # Check class
-            classes = set(a.get("class") or [])
-            if classes & next_classes:
-                return urljoin(current_url, href)
-            # Check link text
             text = a.get_text(strip=True).lower()
-            if text in next_texts:
+            if text in {"next", ">", ">>", "→", "»"}:
                 return urljoin(current_url, href)
+            if any(text.startswith(kw) or text.endswith(kw) or kw in text
+                   for kw in next_keywords):
+                return urljoin(current_url, href)
+
+        # 5. Numeric URL increment fallback (e.g. chapter-7001 → chapter-7002)
+        parsed = urlparse(current_url)
+        path = parsed.path
+        m = _re.search(r"(\d+)([^/]*)/?$", path)
+        if m:
+            num = int(m.group(1))
+            suffix = m.group(2)
+            new_path = path[:m.start()] + str(num + 1) + suffix + "/"
+            candidate = urlunparse(parsed._replace(path=new_path))
+            try:
+                self._throttle()
+                resp = self.session.head(candidate, timeout=10, allow_redirects=True)
+                if resp.status_code == 200:
+                    return candidate
+            except Exception:
+                pass
 
         return None
 
