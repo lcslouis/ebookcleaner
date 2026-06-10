@@ -22,8 +22,8 @@ _NOTES = {
     ),
     PROVIDER_GEMINI: (
         "Get a free key at aistudio.google.com (click 'Get API key').\n"
-        "Uses gemini-1.5-flash — free tier: 1,500 requests/day.\n"
-        "Note: keys from Google Cloud Console may hit quota errors; use AI Studio."
+        "Free tier: 1,500 requests/day · 15 requests/minute.\n"
+        "If you see a quota error, wait a minute and try again."
     ),
     PROVIDER_GROQ: (
         "Get a free key at console.groq.com\n"
