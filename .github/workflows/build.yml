@@ -92,7 +92,7 @@ jobs:
       - name: Rename Lite output folder
         shell: pwsh
         run: |
-          Rename-Item "dist\EbookCleaner" "dist\EbookCleaner-Lite"
+          Rename-Item "dist\EbookCleaner" -NewName "EbookCleaner-Lite"
 
       - name: Verify EbookCleaner Lite
         shell: pwsh
