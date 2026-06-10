@@ -65,8 +65,13 @@ class _DownloadRowWidget(QFrame):
 
     def _on_done(self):
         self.bar.setValue(self.bar.maximum())
-        self.status_lbl.setText("Complete")
-        self.status_lbl.setStyleSheet("color: #4caf50;")
+        fc = self.task.failed_count
+        if fc:
+            self.status_lbl.setText(f"Done — {fc} chapter(s) failed (saved as placeholders)")
+            self.status_lbl.setStyleSheet("color: #ff9800;")
+        else:
+            self.status_lbl.setText("Complete")
+            self.status_lbl.setStyleSheet("color: #4caf50;")
         self.cancel_btn.setEnabled(False)
 
     def _on_error(self, msg):

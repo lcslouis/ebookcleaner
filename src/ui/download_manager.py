@@ -7,16 +7,19 @@ DownloadManager — holds all tasks, emits signals for UI updates.
 _FetchWorker is defined here (moved out of fetch_dialog) so both
 the foreground dialog and background tasks share the same worker.
 """
+import time
 import uuid
 from pathlib import Path
 from PySide6.QtCore import QObject, Signal, QThread
+import requests as _requests
 
 
 # ------------------------------------------------------------------ worker
 
 class _FetchSignals(QObject):
     chapter_done = Signal(int, int, str)   # index, total, title
-    finished = Signal(list)               # [{title, content, url}]
+    status_update = Signal(str)            # retry / backoff messages
+    finished = Signal(list)               # [{title, content, url, error}]
     error = Signal(str)
 
 
@@ -37,13 +40,69 @@ class _FetchWorker(QThread):
         for i, ch in enumerate(self.chapter_list):
             if self._cancelled:
                 break
-            try:
-                content = self.fetcher.fetch_chapter(ch["url"])
-            except Exception as e:
-                content = f"[Error fetching chapter: {e}]"
-            results.append({"title": ch["title"], "content": content, "url": ch["url"]})
+            content, err = self._fetch_with_retry(ch["url"], ch["title"], i + 1, total)
+            if err:
+                content = f"[Chapter could not be downloaded: {err}]"
+            results.append({"title": ch["title"], "content": content,
+                            "url": ch["url"], "error": err})
             self.signals.chapter_done.emit(i + 1, total, ch["title"])
         self.signals.finished.emit(results)
+
+    def _fetch_with_retry(self, url: str, title: str, idx: int, total: int):
+        """Fetch one chapter with retries. Returns (content, error_msg)."""
+        max_retries = 3
+        last_err = None
+
+        for attempt in range(max_retries + 1):
+            if self._cancelled:
+                return "", "Cancelled"
+            try:
+                return self.fetcher.fetch_chapter(url), None
+            except _requests.exceptions.HTTPError as e:
+                code = e.response.status_code if e.response is not None else 0
+                if code == 403:
+                    return "", "403 Forbidden — site blocked access to this chapter"
+                if code == 404:
+                    return "", "404 Not Found"
+                if code == 429:
+                    if attempt < max_retries:
+                        wait = 10 * (2 ** attempt)   # 10 s, 20 s, 40 s
+                        self.signals.status_update.emit(
+                            f"Rate limited — waiting {wait}s before retry "
+                            f"({idx}/{total}: {title[:30]}…)"
+                        )
+                        time.sleep(wait)
+                        last_err = f"429 rate limit (retry {attempt + 1})"
+                        continue
+                    return "", "429 Too Many Requests — rate limited"
+                if 500 <= code < 600:
+                    if attempt < max_retries:
+                        wait = 5 * (2 ** attempt)    # 5 s, 10 s, 20 s
+                        self.signals.status_update.emit(
+                            f"Server error {code} — retrying in {wait}s "
+                            f"({idx}/{total}: {title[:30]}…)"
+                        )
+                        time.sleep(wait)
+                        last_err = str(e)
+                        continue
+                    return "", f"Server error {code}"
+                return "", str(e)
+            except (_requests.exceptions.ConnectionError,
+                    _requests.exceptions.Timeout) as e:
+                if attempt < max_retries:
+                    wait = 5 * (2 ** attempt)
+                    self.signals.status_update.emit(
+                        f"Connection error — retrying in {wait}s "
+                        f"({idx}/{total}: {title[:30]}…)"
+                    )
+                    time.sleep(wait)
+                    last_err = str(e)
+                    continue
+                return "", f"Connection error: {e}"
+            except Exception as e:
+                return "", str(e)
+
+        return "", last_err or "Unknown error"
 
 
 # ------------------------------------------------------------------ task
@@ -81,12 +140,14 @@ class DownloadTask(QObject):
         self.status        = self.STATUS_RUNNING
         self.done_count    = 0
         self.total_count   = len(selected_chapters)
+        self.failed_count  = 0
         self.current_chapter = ""
         self.error_msg     = ""
         self.result_book_id: int = 0
 
         self._worker = _FetchWorker(fetcher, selected_chapters)
         self._worker.signals.chapter_done.connect(self._on_chapter_done)
+        self._worker.signals.status_update.connect(self._on_status_update)
         self._worker.signals.finished.connect(self._on_finished)
         self._worker.signals.error.connect(self._on_error)
 
@@ -104,7 +165,12 @@ class DownloadTask(QObject):
         self.current_chapter = title
         self.progress_changed.emit(idx, total, title)
 
+    def _on_status_update(self, msg):
+        self.current_chapter = msg
+        self.progress_changed.emit(self.done_count, self.total_count, msg)
+
     def _on_finished(self, results):
+        self.failed_count = sum(1 for ch in results if ch.get("error"))
         try:
             self._save(results)
             self.status = self.STATUS_DONE

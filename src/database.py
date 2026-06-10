@@ -168,6 +168,24 @@ class Database:
         self.conn.execute(f"UPDATE chapters SET {set_clause} WHERE id = ?", values)
         self.conn.commit()
 
+    def delete_chapters(self, chapter_ids: list) -> None:
+        if not chapter_ids:
+            return
+        placeholders = ",".join("?" * len(chapter_ids))
+        self.conn.execute(f"DELETE FROM chapters WHERE id IN ({placeholders})", chapter_ids)
+        self.conn.commit()
+
+    def replace_chapter_content(self, chapter_id: int, content: str) -> None:
+        """Replace original content and clear derived versions (cleaned, rewritten)."""
+        self.conn.execute(
+            """UPDATE chapters
+               SET original_content = ?, cleaned_content = '', rewritten_content = '',
+                   word_count = ?, status = 'original', updated_at = CURRENT_TIMESTAMP
+               WHERE id = ?""",
+            (content, len(content.split()), chapter_id),
+        )
+        self.conn.commit()
+
     def get_max_chapter_number(self, book_id):
         cur = self.conn.execute(
             "SELECT MAX(chapter_number) FROM chapters WHERE book_id = ?", (book_id,)

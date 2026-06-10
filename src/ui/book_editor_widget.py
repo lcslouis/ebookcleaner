@@ -1,7 +1,7 @@
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QSplitter, QListWidget, QListWidgetItem,
     QTabWidget, QTextEdit, QPushButton, QLabel, QLineEdit, QMessageBox,
-    QProgressDialog, QFrame, QDialog
+    QProgressDialog, QFrame, QDialog, QMenu
 )
 from PySide6.QtCore import Qt, Signal, QThread, QObject, QRunnable, QThreadPool
 from PySide6.QtGui import QPixmap
@@ -112,6 +112,9 @@ class BookEditorWidget(QWidget):
         ch_layout.addWidget(ch_label)
 
         self.chapter_list = QListWidget()
+        self.chapter_list.setSelectionMode(QListWidget.ExtendedSelection)
+        self.chapter_list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.chapter_list.customContextMenuRequested.connect(self._chapter_context_menu)
         self.chapter_list.itemSelectionChanged.connect(self._on_chapter_selected)
         ch_layout.addWidget(self.chapter_list)
 
@@ -263,11 +266,10 @@ class BookEditorWidget(QWidget):
         if self._current_chapter_id and not self._saving:
             self._save_chapter(silent=True)
 
-        items = self.chapter_list.selectedItems()
-        if not items:
+        item = self.chapter_list.currentItem()
+        if item is None:
             return
-        chapter_id = items[0].data(Qt.UserRole)
-        self._load_chapter(chapter_id)
+        self._load_chapter(item.data(Qt.UserRole))
 
     def _load_chapter(self, chapter_id):
         self._current_chapter_id = chapter_id
@@ -418,16 +420,98 @@ class BookEditorWidget(QWidget):
             self.chapter_saved.emit()
 
     def _get_ai_processor(self):
-        api_key = self.db.get_setting("anthropic_api_key", "")
-        if not api_key:
-            QMessageBox.information(
-                self,
-                "API Key Required",
-                "Please configure your Anthropic API key in Settings to use AI features.",
-            )
-            return None
-        from src.ai_processor import AIProcessor
-        return AIProcessor(api_key)
+        from src.ai_processor import (
+            AIProcessor,
+            PROVIDER_ANTHROPIC, PROVIDER_GEMINI, PROVIDER_GROQ, PROVIDER_OLLAMA,
+        )
+        provider = self.db.get_setting("ai_provider", PROVIDER_ANTHROPIC)
+
+        _key_settings = {
+            PROVIDER_ANTHROPIC: ("anthropic_api_key", "Anthropic", "console.anthropic.com"),
+            PROVIDER_GEMINI:    ("gemini_api_key",    "Google Gemini", "aistudio.google.com"),
+            PROVIDER_GROQ:      ("groq_api_key",      "Groq", "console.groq.com"),
+        }
+
+        if provider in _key_settings:
+            setting_key, name, url = _key_settings[provider]
+            api_key = self.db.get_setting(setting_key, "")
+            if not api_key:
+                QMessageBox.information(
+                    self,
+                    "API Key Required",
+                    f"Please configure your {name} API key in Settings.\nGet it at {url}",
+                )
+                return None
+            return AIProcessor(provider=provider, api_key=api_key)
+
+        if provider == PROVIDER_OLLAMA:
+            host  = self.db.get_setting("ollama_host",  "http://localhost:11434")
+            model = self.db.get_setting("ollama_model", "llama3.1")
+            return AIProcessor(provider=provider, ollama_host=host, ollama_model=model)
+
+        return None
+
+    # ------------------------------------------------------------------ chapter context menu
+
+    def _chapter_context_menu(self, pos):
+        selected = self.chapter_list.selectedItems()
+        if not selected:
+            return
+
+        chapter_ids = [item.data(Qt.UserRole) for item in selected]
+        chapters    = [self.db.get_chapter(cid) for cid in chapter_ids]
+        n           = len(chapters)
+        n_fetchable = sum(1 for c in chapters if c and c.get("source_url"))
+
+        menu = QMenu(self)
+
+        lbl_del = f"Delete {n} Chapter{'s' if n > 1 else ''}"
+        delete_action = menu.addAction(lbl_del)
+        delete_action.triggered.connect(lambda: self._delete_chapters(chapter_ids))
+
+        lbl_ref = f"Re-fetch {n} Chapter{'s' if n > 1 else ''}"
+        if n_fetchable < n:
+            lbl_ref += f"  ({n_fetchable} have URLs)"
+        refetch_action = menu.addAction(lbl_ref)
+        refetch_action.setEnabled(n_fetchable > 0)
+        refetch_action.triggered.connect(lambda: self._refetch_chapters(chapters))
+
+        menu.exec(self.chapter_list.mapToGlobal(pos))
+
+    def _delete_chapters(self, chapter_ids: list):
+        n = len(chapter_ids)
+        reply = QMessageBox.question(
+            self,
+            "Delete Chapters",
+            f"Permanently delete {n} chapter{'s' if n > 1 else ''}?\nThis cannot be undone.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        if self._current_chapter_id in chapter_ids:
+            self._current_chapter_id = None
+
+        self.db.delete_chapters(chapter_ids)
+        self._load_chapter_list()
+        if not self._current_chapter_id:
+            self.original_edit.clear()
+            self.cleaned_edit.clear()
+            self.rewritten_edit.clear()
+            self.save_btn.setEnabled(False)
+            self.status_label.setText("")
+
+    def _refetch_chapters(self, chapters: list):
+        from src.ui.refetch_dialog import ReFetchDialog
+        dlg = ReFetchDialog(chapters, self.db, parent=self)
+        dlg.chapters_updated.connect(self._on_refetch_done)
+        dlg.exec()
+
+    def _on_refetch_done(self, updated_ids: list):
+        self._load_chapter_list()
+        if self._current_chapter_id in updated_ids:
+            self._load_chapter(self._current_chapter_id)
 
     def _clean_chapter(self):
         if not self._current_chapter_id:
