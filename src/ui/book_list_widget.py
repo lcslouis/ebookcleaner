@@ -125,11 +125,10 @@ class BookListWidget(QWidget):
 
         menu = QMenu(self)
 
-        if book and book.get("source_url"):
-            act = menu.addAction("Update from Web")
-            act.setToolTip("Re-fetch this book and add any new chapters")
-            act.triggered.connect(lambda: self.update_requested.emit(book_id))
-            menu.addSeparator()
+        act = menu.addAction("Update from Web")
+        act.setToolTip("Fetch new chapters from the web and add them to this book")
+        act.triggered.connect(lambda: self.update_requested.emit(book_id))
+        menu.addSeparator()
 
         del_act = menu.addAction("Delete Book")
         del_act.triggered.connect(lambda: self._delete_book(book_id))

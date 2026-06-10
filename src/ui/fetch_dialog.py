@@ -45,6 +45,7 @@ class FetchDialog(QDialog):
         self._fetch_worker  = None
         self._toc_info      = None
         self.imported_book_id = None
+        self._url_locked    = False   # True only when book already has a stored source_url
 
         title = "Update Book from Web" if update_book_id else "Fetch from Web"
         self.setWindowTitle(title)
@@ -237,6 +238,15 @@ class FetchDialog(QDialog):
             # Lock the URL — update always uses the stored source
             self.url_edit.setReadOnly(True)
             self.url_edit.setToolTip("URL locked — editing is disabled in update mode")
+            self._url_locked = True
+        else:
+            # Book was imported from a file — let the user supply the web URL
+            self.url_edit.setPlaceholderText(
+                "Enter the web URL to fetch new chapters from…"
+            )
+            self.url_edit.setToolTip(
+                "This book was imported locally. Enter the web URL to link it to a source."
+            )
 
         existing_count = len(self.db.get_chapters(book_id))
         existing_lbl = QLabel(
@@ -498,8 +508,12 @@ class FetchDialog(QDialog):
             self.db.add_chapter(book_id, start_num + i, ch["title"], ch["content"],
                                 source_url=ch.get("url", ""))
 
-        # Touch updated_at on the book record
-        self.db.update_book(book_id, title=self.db.get_book(book_id)["title"])
+        # Persist source_url if this book didn't have one (imported from file)
+        book = self.db.get_book(book_id)
+        update_fields = {"title": book["title"]}
+        if source_url and not book.get("source_url"):
+            update_fields["source_url"] = source_url
+        self.db.update_book(book_id, **update_fields)
 
         source_url = self.url_edit.text().strip()
         version_num = self.db.get_next_version_number(book_id)
@@ -604,7 +618,7 @@ class FetchDialog(QDialog):
 
     def _set_loading(self, loading: bool, msg: str = ""):
         self.load_btn.setEnabled(not loading)
-        self.url_edit.setEnabled(not loading and not bool(self._update_book_id))
+        self.url_edit.setEnabled(not loading and not self._url_locked)
         if loading:
             self.progress_bar.setVisible(True)
             self.progress_bar.setRange(0, 0)  # indeterminate

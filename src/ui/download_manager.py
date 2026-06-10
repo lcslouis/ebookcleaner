@@ -251,7 +251,11 @@ class DownloadTask(QObject):
             for i, ch in enumerate(new_chapters):
                 self.db.add_chapter(book_id, start_num + i, ch["title"], ch["content"],
                                     source_url=ch.get("url", ""))
-            self.db.update_book(book_id, title=self.db.get_book(book_id)["title"])
+            book = self.db.get_book(book_id)
+            update_fields = {"title": book["title"]}
+            if self.source_url and not book.get("source_url"):
+                update_fields["source_url"] = self.source_url
+            self.db.update_book(book_id, **update_fields)
             version_num = self.db.get_next_version_number(book_id)
             self.db.add_version(book_id, version_num, self.source_url, len(new_chapters),
                                 notes=f"Update: {len(new_chapters)} new chapter(s) added")

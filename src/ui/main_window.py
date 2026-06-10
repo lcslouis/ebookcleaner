@@ -137,7 +137,7 @@ class MainWindow(QMainWindow):
         book = self.db.get_book(book_id)
         if book:
             self._status_label.setText(f"Loaded: {book['title']}")
-            self._update_action.setEnabled(bool(book.get("source_url")))
+            self._update_action.setEnabled(True)
 
     def _on_book_deleted(self, book_id):
         self.editor._show_empty()
