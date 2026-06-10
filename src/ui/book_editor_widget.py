@@ -580,10 +580,20 @@ class BookEditorWidget(QWidget):
 
     def _delete_chapters(self, chapter_ids: list):
         n = len(chapter_ids)
+        if n == 1:
+            ch = self.db.get_chapter(chapter_ids[0])
+            if ch:
+                ch_label = f"Ch. {ch['chapter_number']}: {ch['title'] or 'Untitled'}"
+            else:
+                ch_label = "this chapter"
+            msg   = f"Delete \"{ch_label}\"?\nThis cannot be undone."
+            title = "Delete Chapter"
+        else:
+            msg   = f"Permanently delete {n} chapters?\nThis cannot be undone."
+            title = "Delete Chapters"
+
         reply = QMessageBox.question(
-            self,
-            "Delete Chapters",
-            f"Permanently delete {n} chapter{'s' if n > 1 else ''}?\nThis cannot be undone.",
+            self, title, msg,
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No,
         )
