@@ -21,7 +21,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0   # needed so git describe works for dev builds
+          fetch-depth: 0
 
       - name: Resolve version
         id: version
@@ -57,61 +57,83 @@ jobs:
           pip install -r requirements.txt
           pip install pyinstaller
 
-      # ------------------------------------------------------------------ EbookCleaner
+      # ------------------------------------------------------------------ 1. EbookCleaner (Full)
 
-      - name: Build EbookCleaner
+      - name: Build EbookCleaner (Full)
         run: pyinstaller ebookcleaner.spec --clean --noconfirm
 
-      - name: Verify EbookCleaner build
+      - name: Verify EbookCleaner (Full)
         shell: pwsh
         run: |
           if (Test-Path "dist\EbookCleaner\EbookCleaner.exe") {
             $size = (Get-Item "dist\EbookCleaner\EbookCleaner.exe").Length / 1MB
-            Write-Host "EbookCleaner — EXE size: $([math]::Round($size,1)) MB"
-          } else {
-            Write-Host "ERROR: EbookCleaner.exe not found"
-            exit 1
-          }
+            Write-Host "EbookCleaner (Full) — $([math]::Round($size,1)) MB"
+          } else { Write-Error "EbookCleaner.exe not found"; exit 1 }
 
-      - name: ZIP EbookCleaner
+      - name: ZIP EbookCleaner (Full)
         shell: pwsh
         run: |
           $zip = "dist\EbookCleaner-Windows-$env:VERSION.zip"
           Compress-Archive -Path dist\EbookCleaner -DestinationPath $zip
-          $size = (Get-Item $zip).Length / 1MB
-          Write-Host "ZIP: $zip  ($([math]::Round($size,1)) MB)"
           echo "CLEANER_ZIP=$zip" >> $env:GITHUB_ENV
 
-      - name: Upload EbookCleaner artifact
+      - name: Upload EbookCleaner (Full) artifact
         uses: actions/upload-artifact@v4
         with:
           name: EbookCleaner-Windows-${{ env.VERSION }}
           path: dist/EbookCleaner/
           retention-days: 90
 
-      # ------------------------------------------------------------------ Provider Studio
+      # ------------------------------------------------------------------ 2. EbookCleaner Lite
+
+      - name: Build EbookCleaner Lite
+        run: pyinstaller ebookcleaner_lite.spec --clean --noconfirm
+
+      - name: Rename Lite output folder
+        shell: pwsh
+        run: |
+          Rename-Item "dist\EbookCleaner" "dist\EbookCleaner-Lite"
+
+      - name: Verify EbookCleaner Lite
+        shell: pwsh
+        run: |
+          if (Test-Path "dist\EbookCleaner-Lite\EbookCleaner.exe") {
+            $size = (Get-Item "dist\EbookCleaner-Lite\EbookCleaner.exe").Length / 1MB
+            Write-Host "EbookCleaner Lite — $([math]::Round($size,1)) MB"
+          } else { Write-Error "EbookCleaner Lite EXE not found"; exit 1 }
+
+      - name: ZIP EbookCleaner Lite
+        shell: pwsh
+        run: |
+          $zip = "dist\EbookCleaner-Lite-Windows-$env:VERSION.zip"
+          Compress-Archive -Path dist\EbookCleaner-Lite -DestinationPath $zip
+          echo "LITE_ZIP=$zip" >> $env:GITHUB_ENV
+
+      - name: Upload EbookCleaner Lite artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: EbookCleaner-Lite-Windows-${{ env.VERSION }}
+          path: dist/EbookCleaner-Lite/
+          retention-days: 90
+
+      # ------------------------------------------------------------------ 3. Provider Studio
 
       - name: Build Provider Studio
         run: pyinstaller provider_studio.spec --clean --noconfirm
 
-      - name: Verify Provider Studio build
+      - name: Verify Provider Studio
         shell: pwsh
         run: |
           if (Test-Path "dist\ProviderStudio\ProviderStudio.exe") {
             $size = (Get-Item "dist\ProviderStudio\ProviderStudio.exe").Length / 1MB
-            Write-Host "ProviderStudio — EXE size: $([math]::Round($size,1)) MB"
-          } else {
-            Write-Host "ERROR: ProviderStudio.exe not found"
-            exit 1
-          }
+            Write-Host "ProviderStudio — $([math]::Round($size,1)) MB"
+          } else { Write-Error "ProviderStudio.exe not found"; exit 1 }
 
       - name: ZIP Provider Studio
         shell: pwsh
         run: |
           $zip = "dist\ProviderStudio-Windows-$env:VERSION.zip"
           Compress-Archive -Path dist\ProviderStudio -DestinationPath $zip
-          $size = (Get-Item $zip).Length / 1MB
-          Write-Host "ZIP: $zip  ($([math]::Round($size,1)) MB)"
           echo "STUDIO_ZIP=$zip" >> $env:GITHUB_ENV
 
       - name: Upload Provider Studio artifact
@@ -119,6 +141,28 @@ jobs:
         with:
           name: ProviderStudio-Windows-${{ env.VERSION }}
           path: dist/ProviderStudio/
+          retention-days: 90
+
+      # ------------------------------------------------------------------ 4. Full Bundle (Cleaner + Studio)
+
+      - name: Build Full Bundle ZIP
+        shell: pwsh
+        run: |
+          $bundle = "dist\EbookCleaner-Full-Bundle-Windows-$env:VERSION"
+          New-Item -ItemType Directory -Path $bundle | Out-Null
+          Copy-Item -Recurse "dist\EbookCleaner" "$bundle\EbookCleaner"
+          Copy-Item -Recurse "dist\ProviderStudio" "$bundle\ProviderStudio"
+          $zip = "$bundle.zip"
+          Compress-Archive -Path $bundle -DestinationPath $zip
+          $size = (Get-Item $zip).Length / 1MB
+          Write-Host "Full Bundle — $([math]::Round($size,1)) MB"
+          echo "BUNDLE_ZIP=$zip" >> $env:GITHUB_ENV
+
+      - name: Upload Full Bundle artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: EbookCleaner-Full-Bundle-Windows-${{ env.VERSION }}
+          path: dist/EbookCleaner-Full-Bundle-Windows-${{ env.VERSION }}/
           retention-days: 90
 
       # ------------------------------------------------------------------ Release (tags only)
@@ -129,26 +173,30 @@ jobs:
         with:
           name: EbookCleaner ${{ env.VERSION }}
           files: |
+            ${{ env.BUNDLE_ZIP }}
             ${{ env.CLEANER_ZIP }}
+            ${{ env.LITE_ZIP }}
             ${{ env.STUDIO_ZIP }}
           generate_release_notes: true
           body: |
             ## EbookCleaner ${{ env.VERSION }}
 
-            Two downloads available:
+            ### Which download do I need?
 
-            | Download | Description |
-            |----------|-------------|
-            | `EbookCleaner-Windows-${{ env.VERSION }}.zip` | Main app — import, clean, rewrite, export ebooks |
-            | `ProviderStudio-Windows-${{ env.VERSION }}.zip` | Provider Studio — create site plugins |
+            | Download | Size | AI features | Site login browser | Plugin creator |
+            |----------|------|-------------|-------------------|----------------|
+            | **Full Bundle** | Largest | ✓ | ✓ | ✓ |
+            | **EbookCleaner** | Large | ✓ | ✓ | — |
+            | **EbookCleaner Lite** | Small | — | — | — |
+            | **Provider Studio** | Small | — | — | ✓ |
 
-            ### Installing EbookCleaner
-            1. Download and extract `EbookCleaner-Windows-${{ env.VERSION }}.zip`
-            2. Run `EbookCleaner.exe` — no Python required
-            3. Go to **Settings** to enter your AI API key
-            4. Use **Plugins** in the toolbar to install community site parsers
+            - **Full Bundle** — EbookCleaner + Provider Studio in one ZIP. Best if you plan to create site plugins.
+            - **EbookCleaner** — Main app with all features (AI cleaning/rewriting, site login browser).
+            - **EbookCleaner Lite** — Fetch, clean with rules, and export. No AI, smaller download.
+            - **Provider Studio** — Standalone tool for creating and submitting site plugins.
 
-            ### Installing Provider Studio
-            1. Download and extract `ProviderStudio-Windows-${{ env.VERSION }}.zip`
-            2. Run `ProviderStudio.exe`
-            3. Fetch a site, define selectors, and submit to the plugin registry
+            ### Installation
+            1. Download and extract your chosen ZIP
+            2. Run `EbookCleaner.exe` or `ProviderStudio.exe` — no Python required
+            3. Go to **Settings** to configure your AI API key (Full/Standard only)
+            4. Use **Plugins** in the toolbar to browse the community plugin registry

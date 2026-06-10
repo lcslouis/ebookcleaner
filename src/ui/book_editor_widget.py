@@ -529,6 +529,14 @@ class BookEditorWidget(QWidget):
             self.chapter_saved.emit()
 
     def _get_ai_processor(self):
+        from src.build_variant import has_ai
+        if not has_ai():
+            QMessageBox.information(
+                self, "Not Available",
+                "AI features are not included in EbookCleaner Lite.\n\n"
+                "Download EbookCleaner (Full) from the releases page to use AI cleaning and rewriting."
+            )
+            return None
         from src.ai_processor import (
             AIProcessor,
             PROVIDER_ANTHROPIC, PROVIDER_GEMINI, PROVIDER_GROQ, PROVIDER_OLLAMA,

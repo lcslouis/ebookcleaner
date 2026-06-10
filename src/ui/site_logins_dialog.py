@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt
 
-from src.site_login import LoginBrowserDialog
+from src.build_variant import has_webengine
 
 
 class SiteLoginsDialog(QDialog):
@@ -125,6 +125,14 @@ class SiteLoginsDialog(QDialog):
         self._launch_browser(url.strip())
 
     def _launch_browser(self, url: str):
+        if not has_webengine():
+            QMessageBox.information(
+                self, "Not Available",
+                "The in-app login browser requires the Full version of EbookCleaner.\n\n"
+                "Download EbookCleaner (Full) from the releases page to use Site Logins."
+            )
+            return
+        from src.site_login import LoginBrowserDialog
         dlg = LoginBrowserDialog(url, parent=self)
         if dlg.exec() != QDialog.Accepted:
             self.status_lbl.setText("Login cancelled.")
