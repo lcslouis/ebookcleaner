@@ -158,7 +158,7 @@ class EpubExporter:
             raise ValueError("No content to export — run cleaning or check chapter content")
 
         # TOC and spine
-        eb.toc = [epub.Link(c.file_name, c.title, c.uid) for c in epub_chapters]
+        eb.toc = [epub.Link(c.file_name, c.title, c.id) for c in epub_chapters]
         eb.add_item(epub.EpubNcx())
         eb.add_item(epub.EpubNav())
         eb.spine = ["nav"] + epub_chapters
