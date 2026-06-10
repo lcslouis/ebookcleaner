@@ -6,7 +6,7 @@ PROVIDER_GROQ      = "groq"
 PROVIDER_OLLAMA    = "ollama"
 
 ANTHROPIC_MODEL = "claude-haiku-4-5-20251001"
-GEMINI_MODEL    = "gemini-2.0-flash"
+GEMINI_MODEL    = "gemini-1.5-flash"
 GROQ_MODEL      = "llama-3.3-70b-versatile"
 
 MAX_CHUNK = 80_000
@@ -72,7 +72,8 @@ class AIProcessor:
             return True
         return bool(self.api_key and self.api_key.strip())
 
-    def test_connection(self) -> bool:
+    def test_connection(self) -> tuple:
+        """Returns (success: bool, error_message: str)."""
         try:
             client = self._get_client()
 
@@ -99,9 +100,9 @@ class AIProcessor:
                     max_tokens=10,
                 )
 
-            return True
-        except Exception:
-            return False
+            return True, ""
+        except Exception as e:
+            return False, str(e)
 
     def clean_chapter(self, text: str, progress_cb=None) -> str:
         return self._process(text, CLEAN_SYSTEM, progress_cb)

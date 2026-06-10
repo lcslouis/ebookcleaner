@@ -21,8 +21,9 @@ _NOTES = {
         "$5 free credit on signup."
     ),
     PROVIDER_GEMINI: (
-        "Get a free key at aistudio.google.com\n"
-        "Free tier: 1,500 requests/day · 1 M tokens/min."
+        "Get a free key at aistudio.google.com (click 'Get API key').\n"
+        "Uses gemini-1.5-flash — free tier: 1,500 requests/day.\n"
+        "Note: keys from Google Cloud Console may hit quota errors; use AI Studio."
     ),
     PROVIDER_GROQ: (
         "Get a free key at console.groq.com\n"
@@ -37,7 +38,7 @@ _NOTES = {
 
 _PLACEHOLDERS = {
     PROVIDER_ANTHROPIC: "sk-ant-...",
-    PROVIDER_GEMINI:    "AIza...",
+    PROVIDER_GEMINI:    "Paste your API key here",
     PROVIDER_GROQ:      "gsk_...",
 }
 
@@ -215,7 +216,7 @@ class SettingsDialog(QDialog):
 
         self.test_btn.setText("Testing…")
         self.test_btn.setEnabled(False)
-        ok = proc.test_connection()
+        ok, err = proc.test_connection()
         self.test_btn.setEnabled(True)
         self.test_btn.setText("Test Connection")
 
@@ -224,5 +225,5 @@ class SettingsDialog(QDialog):
         else:
             QMessageBox.critical(
                 self, "Failed",
-                "Connection failed. Check your settings and internet connection."
+                f"Connection failed:\n\n{err}"
             )
