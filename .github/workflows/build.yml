@@ -79,7 +79,7 @@ jobs:
         shell: pwsh
         run: |
           $zip = "dist\EbookCleaner-Windows-$env:VERSION.zip"
-          Compress-Archive -Path dist\EbookCleaner-Full -DestinationPath $zip
+          Compress-Archive -Path dist\EbookCleaner-Full\* -DestinationPath $zip
           echo "CLEANER_ZIP=$zip" >> $env:GITHUB_ENV
 
       - name: Upload EbookCleaner (Full) artifact
@@ -111,7 +111,7 @@ jobs:
         shell: pwsh
         run: |
           $zip = "dist\EbookCleaner-Lite-Windows-$env:VERSION.zip"
-          Compress-Archive -Path dist\EbookCleaner-Lite -DestinationPath $zip
+          Compress-Archive -Path dist\EbookCleaner-Lite\* -DestinationPath $zip
           echo "LITE_ZIP=$zip" >> $env:GITHUB_ENV
 
       - name: Upload EbookCleaner Lite artifact
@@ -138,7 +138,7 @@ jobs:
         shell: pwsh
         run: |
           $zip = "dist\ProviderStudio-Windows-$env:VERSION.zip"
-          Compress-Archive -Path dist\ProviderStudio -DestinationPath $zip
+          Compress-Archive -Path dist\ProviderStudio\* -DestinationPath $zip
           echo "STUDIO_ZIP=$zip" >> $env:GITHUB_ENV
 
       - name: Upload Provider Studio artifact
@@ -153,21 +153,22 @@ jobs:
       - name: Build Full Bundle ZIP
         shell: pwsh
         run: |
-          $bundle = "dist\EbookCleaner-Full-Bundle-Windows-$env:VERSION"
+          $bundle = "dist\bundle-stage"
           New-Item -ItemType Directory -Path $bundle | Out-Null
           Copy-Item -Recurse "dist\EbookCleaner-Full" "$bundle\EbookCleaner"
           Copy-Item -Recurse "dist\ProviderStudio" "$bundle\ProviderStudio"
-          $zip = "$bundle.zip"
-          Compress-Archive -Path $bundle -DestinationPath $zip
+          $zip = "dist\EbookCleaner-Full-Bundle-Windows-$env:VERSION.zip"
+          Compress-Archive -Path $bundle\* -DestinationPath $zip
           $size = (Get-Item $zip).Length / 1MB
           Write-Host "Full Bundle — $([math]::Round($size,1)) MB"
           echo "BUNDLE_ZIP=$zip" >> $env:GITHUB_ENV
+          echo "BUNDLE_STAGE=$bundle" >> $env:GITHUB_ENV
 
       - name: Upload Full Bundle artifact
         uses: actions/upload-artifact@v4
         with:
           name: EbookCleaner-Full-Bundle-Windows-${{ env.VERSION }}
-          path: dist/EbookCleaner-Full-Bundle-Windows-${{ env.VERSION }}/
+          path: dist/bundle-stage/
           retention-days: 90
 
       # ------------------------------------------------------------------ Release (tags only)
