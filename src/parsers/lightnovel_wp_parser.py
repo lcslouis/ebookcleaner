@@ -82,15 +82,38 @@ _COVER_SELECTORS = [
 
 
 def _is_wordpress(soup) -> bool:
-    """True if the page is served by WordPress."""
+    """True if the page is served by WordPress.
+
+    Checks in order of reliability:
+    1. Standard generator meta tag (most sites have this)
+    2. wp-content / wp-includes in any asset URL (catches sites that strip the meta)
+    3. WordPress-specific links buried in the page (wp-login, wp-admin, wp-json, xmlrpc)
+    4. Common WP body classes (home, page, single, blog, logged-in)
+    """
     gen = soup.find("meta", attrs={"name": "generator"})
     if gen and re.search(r"wordpress", gen.get("content", ""), re.IGNORECASE):
         return True
-    # Fallback: any stylesheet/script from wp-content
-    for tag in soup.find_all(["link", "script"], limit=30):
+
+    # Asset paths
+    for tag in soup.find_all(["link", "script"], limit=50):
         src = tag.get("href") or tag.get("src") or ""
         if "wp-content" in src or "wp-includes" in src:
             return True
+
+    # WordPress-specific URL patterns anywhere in the page
+    page_text = str(soup)[:50_000]   # cap to avoid scanning huge pages
+    if re.search(r'/(wp-login\.php|wp-admin/|wp-json/|xmlrpc\.php)["\'/]', page_text):
+        return True
+
+    # WP body classes — present on virtually every WP theme
+    body = soup.find("body")
+    if body:
+        classes = " ".join(body.get("class") or [])
+        if re.search(r"\b(home|single|page|archive|blog|logged-in|wp-)\b", classes):
+            # Only treat as WP if at least one other WP-ish element is present
+            if soup.find(attrs={"class": re.compile(r"^wp-")}):
+                return True
+
     return False
 
 

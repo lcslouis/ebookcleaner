@@ -74,6 +74,26 @@ def detect_site_name(url: str) -> str:
     return get_parser(url).site_name
 
 
+def get_parser_by_name(site_name: str):
+    """Return the parser whose site_name matches (case-insensitive), or None."""
+    target = site_name.strip().lower()
+    for p in _ALL_PARSERS:
+        if p.site_name.lower() == target:
+            return p
+    return None
+
+
+def list_parser_names() -> list[tuple]:
+    """Return sorted (site_name, parser_type) pairs for the override UI."""
+    result = []
+    for p in _DEDICATED:
+        result.append((p.site_name, "Dedicated"))
+    for p in _CONFIG:
+        result.append((p.site_name, "Config"))
+    result.append((DefaultParser().site_name, "Default"))
+    return sorted(result, key=lambda x: x[0].lower())
+
+
 def list_supported_sites() -> list:
     """Return a sorted list of all site names and their domains."""
     sites = []

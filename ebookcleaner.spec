@@ -16,7 +16,8 @@ lxml_datas, lxml_bins, lxml_hidden = collect_all('lxml')
 all_datas = (
     ebooklib_datas + anthropic_datas + httpx_datas +
     httpcore_datas + certifi_datas + requests_datas +
-    bs4_datas + lxml_datas
+    bs4_datas + lxml_datas +
+    [('assets/icon.ico', 'assets'), ('assets/icon_preview.png', 'assets')]
 )
 all_bins = (
     ebooklib_bins + anthropic_bins + httpx_bins + httpcore_bins +

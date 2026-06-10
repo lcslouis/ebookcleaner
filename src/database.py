@@ -225,6 +225,30 @@ class Database:
         )
         self.conn.commit()
 
+    def reorder_chapters(self, book_id: int, chapter_ids: list) -> None:
+        """Reassign chapter_number values to match the given ID order (1-based).
+
+        Uses a two-pass update (shift to large negatives first) to avoid
+        UNIQUE(book_id, chapter_number) violations during the reorder.
+        """
+        if not chapter_ids:
+            return
+        c = self.conn
+        # Pass 1: shift all to large negative numbers to free up positive slots
+        for i, cid in enumerate(chapter_ids, start=1):
+            c.execute(
+                "UPDATE chapters SET chapter_number = ? WHERE id = ? AND book_id = ?",
+                (-i, cid, book_id),
+            )
+        # Pass 2: assign final 1-based numbers
+        for i, cid in enumerate(chapter_ids, start=1):
+            c.execute(
+                "UPDATE chapters SET chapter_number = ?, updated_at = CURRENT_TIMESTAMP "
+                "WHERE id = ? AND book_id = ?",
+                (i, cid, book_id),
+            )
+        c.commit()
+
     def get_max_chapter_number(self, book_id):
         cur = self.conn.execute(
             "SELECT MAX(chapter_number) FROM chapters WHERE book_id = ?", (book_id,)

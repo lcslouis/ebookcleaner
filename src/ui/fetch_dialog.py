@@ -2,7 +2,7 @@ from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
     QListWidget, QListWidgetItem, QProgressBar, QSpinBox, QDoubleSpinBox,
     QCheckBox, QMessageBox, QSplitter, QWidget, QTextEdit, QFrame,
-    QGroupBox, QFormLayout
+    QGroupBox, QFormLayout, QComboBox
 )
 from PySide6.QtCore import Qt, QThread, QObject, Signal, Slot
 from PySide6.QtGui import QColor, QBrush
@@ -112,6 +112,24 @@ class FetchDialog(QDialog):
         parser_layout.addWidget(self._parser_label, 1)
         root.addWidget(parser_frame)
         self._parser_frame = parser_frame
+
+        # Parser override row
+        override_row = QHBoxLayout(); override_row.setSpacing(8)
+        override_lbl = QLabel("Parser override:")
+        override_lbl.setObjectName("subtext")
+        override_row.addWidget(override_lbl)
+        self._parser_combo = QComboBox()
+        self._parser_combo.setToolTip(
+            "Auto-detect picks the best parser automatically.\n"
+            "Override to force a specific parser if auto-detect is wrong."
+        )
+        self._parser_combo.addItem("Auto-detect (recommended)", "")
+        from src.parsers.registry import list_parser_names
+        for name, ptype in list_parser_names():
+            self._parser_combo.addItem(f"{name}  [{ptype}]", name)
+        self._parser_combo.currentIndexChanged.connect(self._on_parser_override_changed)
+        override_row.addWidget(self._parser_combo, 1)
+        root.addLayout(override_row)
 
         # Advanced options (generic parser CSS selector)
         adv_group = QGroupBox("Advanced (Generic Parser)")
@@ -278,6 +296,16 @@ class FetchDialog(QDialog):
 
     # ------------------------------------------------------------------ slots
 
+    def _on_parser_override_changed(self, _index):
+        override = self._parser_combo.currentData()
+        if override:
+            self._update_parser_banner(override, "Override")
+        elif self.url_edit.text().strip():
+            self._on_url_changed(self.url_edit.text())
+
+    def _get_parser_override(self) -> str:
+        return self._parser_combo.currentData() or ""
+
     def _on_url_changed(self, text):
         text = text.strip()
         self.load_btn.setEnabled(bool(text))
@@ -306,6 +334,12 @@ class FetchDialog(QDialog):
             bg = "#fff3e0"
             border = "#ffcc80"
             desc = "Config-based parser — CSS-selector driven, good support"
+        elif parser_type == "Override":
+            icon = "⚙"
+            color = "#1565c0"      # blue
+            bg = "#e3f2fd"
+            border = "#90caf9"
+            desc = "Manually overridden — using this parser regardless of URL"
         else:
             icon = "!"
             color = "#b71c1c"      # dark red
@@ -335,7 +369,8 @@ class FetchDialog(QDialog):
         selector = self.selector_edit.text().strip() if self._adv_group.isChecked() else ""
         from src.web_fetcher import WebFetcher
         fetcher = WebFetcher(delay=self.delay_spin.value(), content_selector=selector,
-                             cookies=self._get_cookies())
+                             cookies=self._get_cookies(),
+                             parser_override=self._get_parser_override())
 
         self._toc_worker = _TocWorker(fetcher, url)
         self._toc_worker.signals.finished.connect(self._on_toc_loaded)
@@ -448,7 +483,8 @@ class FetchDialog(QDialog):
         selector = self.selector_edit.text().strip() if self._adv_group.isChecked() else ""
         from src.web_fetcher import WebFetcher
         fetcher = WebFetcher(delay=self.delay_spin.value(), content_selector=selector,
-                             cookies=self._get_cookies())
+                             cookies=self._get_cookies(),
+                             parser_override=self._get_parser_override())
 
         self._fetch_worker = _FetchWorker(fetcher, selected)
         self._fetch_worker.signals.chapter_done.connect(self._on_chapter_done)
@@ -557,7 +593,8 @@ class FetchDialog(QDialog):
         from src.ui.download_manager import DownloadTask
         selector = self.selector_edit.text().strip() if self._adv_group.isChecked() else ""
         fetcher = WebFetcher(delay=self.delay_spin.value(), content_selector=selector,
-                             cookies=self._get_cookies())
+                             cookies=self._get_cookies(),
+                             parser_override=self._get_parser_override())
 
         task = DownloadTask(
             db=self.db,

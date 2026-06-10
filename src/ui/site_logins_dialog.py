@@ -163,11 +163,15 @@ class SiteLoginsDialog(QDialog):
         tmp.close()
         output_file = tmp.name
 
-        # main.py is two directories up from this file (src/ui/ → src/ → root)
-        main_py = str(Path(__file__).parent.parent.parent / "main.py")
-        process = subprocess.Popen(
-            [sys.executable, main_py, "--webview-login", url, output_file]
-        )
+        if getattr(sys, "frozen", False):
+            # Packaged EXE: run the EXE directly — no script path needed
+            cmd = [sys.executable, "--webview-login", url, output_file]
+        else:
+            # Development: run the main.py script via the Python interpreter
+            main_py = str(Path(__file__).parent.parent.parent / "main.py")
+            cmd = [sys.executable, main_py, "--webview-login", url, output_file]
+
+        process = subprocess.Popen(cmd)
 
         self._watcher = _LoginWatcher(process, output_file)
         self._watcher.finished.connect(self._on_login_done)
