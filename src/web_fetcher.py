@@ -4,7 +4,7 @@ import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin
 
-from src.parsers.registry import get_parser
+from src.parsers.registry import get_parser, get_parser_by_name
 from src.parsers.scribblehub_parser import ScribbleHubParser
 
 HEADERS = {
@@ -20,12 +20,13 @@ HEADERS = {
 
 class WebFetcher:
     def __init__(self, delay: float = 1.5, content_selector: str = "",
-                 cookies: list = None):
+                 cookies: list = None, parser_override: str = ""):
         self.delay = delay
         self.content_selector = content_selector
         self.session = requests.Session()
         self.session.headers.update(HEADERS)
         self._last_request_time = 0.0
+        self._parser_override = parser_override
         if cookies:
             for c in cookies:
                 self.session.cookies.set(
@@ -48,7 +49,11 @@ class WebFetcher:
         """
         html = self._get(url)
         soup = BeautifulSoup(html, "lxml")
-        parser = get_parser(url, self.content_selector, soup)
+        parser = (
+            get_parser_by_name(self._parser_override) or get_parser(url, self.content_selector, soup)
+            if self._parser_override
+            else get_parser(url, self.content_selector, soup)
+        )
         info = parser.get_book_info(url, soup)
 
         # Resolve special placeholder chapters
@@ -60,7 +65,11 @@ class WebFetcher:
         """Fetch and return plain text content of a single chapter page."""
         html = self._get(url)
         soup = BeautifulSoup(html, "lxml")
-        parser = get_parser(url, self.content_selector, soup)
+        parser = (
+            get_parser_by_name(self._parser_override) or get_parser(url, self.content_selector, soup)
+            if self._parser_override
+            else get_parser(url, self.content_selector, soup)
+        )
         return parser.get_chapter_content(url, soup)
 
     def download_image(self, url: str) -> tuple:
@@ -154,6 +163,34 @@ class WebFetcher:
         self._last_request_time = time.time()
         # Prefer UTF-8 regardless of Content-Type header
         try:
-            return resp.content.decode("utf-8")
+            html = resp.content.decode("utf-8")
         except UnicodeDecodeError:
-            return resp.text
+            html = resp.text
+        self._check_bot_challenge(html, url)
+        return html
+
+    @staticmethod
+    def _check_bot_challenge(html: str, url: str) -> None:
+        """Raise a descriptive error if the response is a bot-protection challenge."""
+        from urllib.parse import urlparse
+        domain = urlparse(url).netloc
+        # Imunify360 challenge ("One moment, please..." title + wsidchk cookie logic)
+        if "wsidchk" in html and "One moment" in html:
+            raise ValueError(
+                f"Bot protection (Imunify360) is blocking automated access to {domain}.\n\n"
+                f"To fix this:\n"
+                f"1. Open Site Logins in the toolbar\n"
+                f"2. Enter {url[:60]} and log in using the browser\n"
+                f"3. Click '✓ Done — Save Login' to capture the session cookie\n"
+                f"4. Try fetching again — the saved cookie will bypass the challenge."
+            )
+        # Cloudflare JS challenge / Under Attack Mode
+        if "cf-browser-verification" in html or (
+            "challenge-platform" in html and "cloudflare" in html.lower()
+        ):
+            raise ValueError(
+                f"Cloudflare bot protection is blocking automated access to {domain}.\n\n"
+                f"To fix this:\n"
+                f"1. Open Site Logins and save your session cookies for {domain}\n"
+                f"2. Try fetching again."
+            )

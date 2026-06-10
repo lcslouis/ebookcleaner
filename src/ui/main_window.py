@@ -253,6 +253,8 @@ class MainWindow(QMainWindow):
     def _check_for_updates(self):
         from src.ui.update_checker import CheckForUpdatesDialog
         CheckForUpdatesDialog(self.db, self.download_manager, self).exec()
+        # Always reset the badge once the user has seen the dialog
+        self._check_updates_action.setText("Check for Updates")
 
     def _auto_check_for_updates(self):
         """Silent background check on launch; only shows a notification if updates found."""
