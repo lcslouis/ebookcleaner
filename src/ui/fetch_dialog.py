@@ -528,13 +528,12 @@ class FetchDialog(QDialog):
                                 source_url=ch.get("url", ""))
 
         # Persist source_url if this book didn't have one (imported from file)
+        source_url = self.url_edit.text().strip()
         book = self.db.get_book(book_id)
         update_fields = {"title": book["title"]}
         if source_url and not book.get("source_url"):
             update_fields["source_url"] = source_url
         self.db.update_book(book_id, **update_fields)
-
-        source_url = self.url_edit.text().strip()
         version_num = self.db.get_next_version_number(book_id)
         self.db.add_version(book_id, version_num, source_url, len(new_chapters),
                              notes=f"Update: {len(new_chapters)} new chapter(s) added")
