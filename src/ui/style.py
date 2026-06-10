@@ -43,9 +43,10 @@ QPushButton {
     color: #1e1e2e;
     border: none;
     border-radius: 4px;
-    padding: 6px 16px;
+    padding: 6px 20px;
     font-weight: bold;
     min-height: 28px;
+    min-width: 64px;
 }
 QPushButton:hover {
     background-color: #b4befe;
@@ -67,9 +68,14 @@ QPushButton#danger:hover {
 QPushButton#secondary {
     background-color: #313244;
     color: #cdd6f4;
+    min-width: 48px;
 }
 QPushButton#secondary:hover {
     background-color: #45475a;
+}
+QPushButton#icon {
+    min-width: 0px;
+    padding: 4px 8px;
 }
 QLineEdit {
     background-color: #181825;
@@ -209,8 +215,9 @@ QToolBar QToolButton {
     color: #cdd6f4;
     border: none;
     border-radius: 4px;
-    padding: 4px 10px;
+    padding: 5px 14px;
     font-size: 13px;
+    min-width: 0px;
 }
 QToolBar QToolButton:hover {
     background-color: #313244;
