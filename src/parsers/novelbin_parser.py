@@ -199,8 +199,14 @@ class NovelBinParser(BaseParser):
         return self._links_to_list(links, base_url)
 
     def _extract_slug(self, base_url: str) -> str:
-        """Extract the novel slug from the URL: /b/{slug} → slug."""
-        m = re.search(r"/b/([^/?#]+)", base_url)
+        """Extract the novel slug from the URL.
+
+        Handles both URL patterns used by NovelBin domains:
+          /b/{slug}          (novelbin.com style)
+          /novel-book/{slug} (novelbin.me style)
+        Also accepts the slug from a data-novel-id attribute as a last resort.
+        """
+        m = re.search(r"/(?:b|novel-book)/([^/?#]+)", base_url)
         return m.group(1) if m else ""
 
     def _extract_csrf(self, soup) -> str:
@@ -223,7 +229,7 @@ class NovelBinParser(BaseParser):
             href = a.get("href", "")
             if not href or href.startswith("#"):
                 continue
-            if "/b/" not in href and not href.startswith("http"):
+            if not href.startswith("http") and "/b/" not in href and "/novel-book/" not in href:
                 continue
             full = self.absolute_url(base_url, href)
             if full in seen:
