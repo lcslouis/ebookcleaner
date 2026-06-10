@@ -6,6 +6,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, Signal, QThread, QObject, QRunnable, QThreadPool
 from PySide6.QtGui import QPixmap
 import threading
+import traceback
 
 
 class _WorkerSignals(QObject):
@@ -25,9 +26,10 @@ class _AIWorker(QRunnable):
     def run(self):
         try:
             result = self.fn(*self.args, **self.kwargs)
-            self.signals.finished.emit(result)
-        except Exception as e:
-            self.signals.error.emit(str(e))
+            # Guard against None — PySide6 Signal(str).emit(None) hard-crashes
+            self.signals.finished.emit(result or "")
+        except BaseException as e:
+            self.signals.error.emit(traceback.format_exc() or str(e))
 
 
 class BookEditorWidget(QWidget):
